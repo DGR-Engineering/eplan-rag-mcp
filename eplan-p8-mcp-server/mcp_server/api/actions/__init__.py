@@ -322,6 +322,8 @@ from .scripthost import (
     script_status,
     script_cancel,
     script_list,
+    script_offline_stop,
+    script_host_install,
 )
 
 # Dialogs (list/click EPLAN windows from Windows, works while EPLAN is blocked)
@@ -559,6 +561,7 @@ __all__ = [
     'scratch_project_create', 'scratch_project_discard', 'scratch_project_list',
     # Script host
     'script_hello', 'script_run', 'script_status', 'script_cancel', 'script_list',
+    'script_offline_stop', 'script_host_install',
     # Dialogs
     'list_dialogs', 'click_dialog_button', 'dialog_history',
     # Discovery

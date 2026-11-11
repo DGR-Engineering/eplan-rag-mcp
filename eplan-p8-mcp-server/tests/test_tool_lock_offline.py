@@ -53,4 +53,6 @@ def test_script_tools_carry_the_expected_hints(monkeypatch):
     for name in ("eplan_script_list", "eplan_script_status", "eplan_script_hello"):
         assert published[name] == "read"
     assert published["eplan_script_run"] == "-"          # may write: never auto-approved
+    assert published["eplan_script_host_install"] == "-"  # downloads and writes files
+    assert published["eplan_script_offline_stop"] == "-"
     assert published["eplan_scratch_project_discard"] == "destructive"

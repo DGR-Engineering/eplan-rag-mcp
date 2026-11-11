@@ -202,7 +202,9 @@ eplan_scratch_symbols_restore	destructive
 eplan_scratch_symbols_status	read
 eplan_script_cancel	-
 eplan_script_hello	read
+eplan_script_host_install	-
 eplan_script_list	read
+eplan_script_offline_stop	-
 eplan_script_run	-
 eplan_script_status	read
 eplan_search_all_properties	read

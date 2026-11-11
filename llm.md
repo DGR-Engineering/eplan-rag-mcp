@@ -39,10 +39,11 @@ Use one of these whenever you are unsure of an exact action name or parameter â€
 
 ## 2. The local `eplan` action server
 
-It exposes **251 tools** (full tool-by-tool reference: [the project wiki](https://github.com/covagashi/eplan-rag-mcp/wiki)):
+It exposes **253 tools** (full tool-by-tool reference: [the project wiki](https://github.com/covagashi/eplan-rag-mcp/wiki)):
 
-- **5 script-host tools** (`eplan_script_hello`, `eplan_script_run`,
-  `eplan_script_status`, `eplan_script_cancel`, `eplan_script_list`): typed C#
+- **7 script-host tools** (`eplan_script_hello`, `eplan_script_run`,
+  `eplan_script_status`, `eplan_script_cancel`, `eplan_script_list`,
+  `eplan_script_offline_stop`, `eplan_script_host_install`): typed C#
   run inside EPLAN with no rebuild and no restart. See "Escape hatches" below;
   prefer them to `eplan_execute_custom_script` for anything that reads or writes
   the data model.
@@ -329,6 +330,13 @@ All of these exist as `eplan_*` tools:
   - Long runs return a `run_id`: follow with `eplan_script_status`, stop with
     `eplan_script_cancel`. `eplan_script_list` shows the script library;
     `dotnet/scripts/_template.cs` is the starting point for a new one.
+  - `eplan_script_offline_stop` stops the offline host (`runtime="offline"`;
+    it otherwise exits after 30 idle minutes).
+  - No local `dotnet/` build? The host installs itself on first use from the
+    GitHub release matching the server's version, checked against its
+    SHA-256 sums; `eplan_script_host_install` does it explicitly and returns
+    the `install_file` to register the add-in with `eplan_register_addon`.
+    `eplan_script_hello` warns when the host's version differs.
 - `eplan_execute_raw_action("ActionName /PARAM:value ...")` â€” run any EPLAN
   action string directly (still wrapped in QuietMode). Use after confirming the
   syntax with the RAG.
