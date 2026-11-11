@@ -153,6 +153,8 @@ follow the same rules as the other writing tools:
 - **Bulk writes need an explicit scope and a `limit`** (a required argument): refuse when nothing
   matches or more than `limit` matches, and write nothing in that case (`Guards.OverLimit`).
 - **Read every write back** and report what did not stick (`not_stuck`).
+- **Refuse by returning `{"error": "..."}`** (or by throwing). A run whose returned object has a
+  non-empty top-level `error` reports `success: false`, so a refusal never reads as done.
 - **Snapshots are envelopes** (`Guards.SnapshotEnvelope`: kind, schema, project, rows). A restore
   reads them with `PlainJson.ReadSnapshot`, which refuses another kind, an unknown schema, a bare
   array, or another project unless `allow_other_project=true`, and writes one outcome per row to a
