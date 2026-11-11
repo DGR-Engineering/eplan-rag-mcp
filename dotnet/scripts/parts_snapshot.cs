@@ -6,9 +6,12 @@
 // @writes   false
 // @needs    session
 //
-// One row per function: page ("" when unplaced), dt, symbol, category, is_main, fixed, cp (connection
-// point designations 1-4) and parts [{part, variant, count, pos, assembly}]. The file records the
-// project name, so parts_restore refuses it for another project unless told otherwise.
+// Snapshot schema 2. One row per function: id (the object identifier, ToStringIdentifier()), page
+// ("" when unplaced), dt (device tag without structures), full_dt (with structures), definition
+// (function definition identifier), symbol and variant ("" and -1 when unplaced), category, is_main,
+// fixed, cp (connection point designations 1-4) and parts [{part, variant, count, pos, assembly}].
+// The file records the project name, so parts_restore refuses it for another project unless told
+// otherwise, and uses the ids only for the same project.
 using System.Collections;
 using System.Linq;
 using EplanMcp.Eplan;
@@ -19,9 +22,9 @@ public static class Script
     public static object Run(ScriptContext ctx)
     {
         var project = ctx.RequireProject();
-        var rows = Parts.Snapshot(ctx, project, ctx.Args.String("page_prefix"));
         var path = PlainJson.OutPath(ctx, ctx.Args.String("out"), "parts_snapshot.json");
-        long bytes = PlainJson.Write(path, Guards.SnapshotEnvelope("parts", 1, project.ProjectName, project.ProjectFullName, rows));
+        var rows = Parts.Snapshot(ctx, project, ctx.Args.String("page_prefix"));
+        long bytes = PlainJson.Write(path, Guards.SnapshotEnvelope("parts", Parts.SnapshotSchema, project.ProjectName, project.ProjectFullName, rows));
         var withParts = rows.Where(r => ((ICollection)r["parts"]!).Count > 0).ToList();
         int readErrors = rows.Count(r => r.ContainsKey("error"));
         return new
