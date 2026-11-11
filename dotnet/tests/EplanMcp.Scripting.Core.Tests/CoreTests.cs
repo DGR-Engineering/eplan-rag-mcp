@@ -21,6 +21,9 @@ namespace EplanMcp.Scripting.Core.Tests
     internal sealed class TestEnvironment : IRunEnvironment
     {
         public bool WriteAllowed { get; set; }
+        public bool RealProject { get; set; }
+        public bool DisposeThrows { get; set; }
+        public string Project { get; set; } = "test.elk";
         public string? LastApprovalHash { get; private set; }
         public bool? ContextWriteAllowed { get; private set; }
         public string? VerifyError { get; set; }
@@ -38,10 +41,13 @@ namespace EplanMcp.Scripting.Core.Tests
         {
             private readonly TestEnvironment _env;
             public Session(TestEnvironment env) { _env = env; }
-            public Preflight Prepare(ScriptManifest manifest, string approvalHash)
+            public Preflight Resolve(ScriptManifest manifest) => new Preflight { Project = _env.Project };
+            public void Authorize(ScriptManifest manifest, Preflight pre, string approvalHash)
             {
                 _env.LastApprovalHash = approvalHash;
-                return new Preflight { Project = "test.elk", WriteAllowed = _env.WriteAllowed, Gate = _env.WriteAllowed ? "scratch" : "real project" };
+                pre.WriteAllowed = _env.WriteAllowed;
+                pre.RealProject = _env.WriteAllowed && _env.RealProject;
+                pre.Gate = _env.WriteAllowed ? (_env.RealProject ? "real project, confirmed" : "scratch") : "real project";
             }
             public object CreateContext(ScriptManifest m, Preflight p, Budget b, ProgressWriter pr, List<string> log)
             {
@@ -50,7 +56,7 @@ namespace EplanMcp.Scripting.Core.Tests
             }
             public string? BeginWrite(string description) { _env.WriteSteps++; return description; }
             public string? Verify() => _env.VerifyError;
-            public void Dispose() { }
+            public void Dispose() { if (_env.DisposeThrows) throw new InvalidOperationException("close failed"); }
         }
     }
 
@@ -149,8 +155,155 @@ namespace EplanMcp.Scripting.Core.Tests
         {
             var bad = RunPipeline.Execute(Req("System.IO.File.Delete(\"x\"); return 1;"), new TestEnvironment(), Audit);
             Assert.Contains(bad.Diagnostics, d => d.Id == "EMCP001");
-            var ok = RunPipeline.Execute(Req("// @unsafe\nreturn System.IO.File.Exists(\"x\");"), new TestEnvironment(), Audit);
+            // @unsafe counts in a saved library script only.
+            var ok = RunPipeline.Execute(Req("// @unsafe\nSystem.IO.File.Delete(\"eplanmcp-no-such-file\"); return 1;", r => r.ScriptPath = "lib/x.cs"), new TestEnvironment(), Audit);
             Assert.True(ok.Ok, ok.Error);
+        }
+
+        [Fact]
+        public void Unsafe_header_is_ignored_in_ad_hoc_code_even_after_a_saved_script_compiled_it()
+        {
+            const string src = "// @unsafe\nSystem.IO.File.Delete(\"eplanmcp-no-such-file-2\"); return 2;";
+            var saved = RunPipeline.Execute(Req(src, r => r.ScriptPath = "lib/y.cs"), new TestEnvironment(), Audit);
+            Assert.True(saved.Ok, saved.Error);
+            var adHoc = RunPipeline.Execute(Req(src), new TestEnvironment(), Audit);   // same source: must not reuse the cached image
+            Assert.False(adHoc.Ok);
+            Assert.Contains(adHoc.Diagnostics, d => d.Id == "EMCP001");
+            Assert.Contains(adHoc.Warnings, w => w.Contains("@unsafe"));
+        }
+
+        [Fact]
+        public void Approval_hash_covers_project_and_dry_run()
+        {
+            var a = Approval.Hash("src", new string[0], "{}", @"C:\p\a.elk", false);
+            Assert.NotEqual(a, Approval.Hash("src", new string[0], "{}", @"C:\p\b.elk", false));
+            Assert.NotEqual(a, Approval.Hash("src", new string[0], "{}", @"C:\p\a.elk", true));
+            Assert.Equal(a, Approval.Hash("src", new string[0], "{}", @"c:\P\A.elk", false));   // one spelling per path
+        }
+
+        [Fact]
+        public void Approval_hash_is_computed_for_the_resolved_project()
+        {
+            var env = new TestEnvironment { Project = @"C:\scratch\resolved.elk" };
+            var res = RunPipeline.Execute(Req("return 1;", r => { r.CompileOnly = true; r.DryRun = true; }), env, Audit);
+            Assert.True(res.Ok, res.Error);
+            Assert.Equal(Approval.Hash("return 1;", new string[0], null, @"C:\scratch\resolved.elk", true), res.ApprovalHash);
+            Assert.Equal(env.LastApprovalHash, res.ApprovalHash);
+        }
+
+        [Fact]
+        public void Failed_audit_refuses_a_real_project_write_but_not_a_scratch_run()
+        {
+            var blocker = Path.Combine(Path.GetTempPath(), "eplanmcp-audit-blocker-" + Guid.NewGuid().ToString("N"));
+            File.WriteAllText(blocker, "a file where the audit folder should be");
+            var broken = new AuditLog(Path.Combine(blocker, "audit"));
+
+            var real = new TestEnvironment { WriteAllowed = true, RealProject = true };
+            var refused = RunPipeline.Execute(Req("// @writes true\nreturn 1;"), real, broken);
+            Assert.False(refused.Ok);
+            Assert.Equal("guard", refused.Phase);
+            Assert.False(refused.AuditOk);
+            Assert.Equal(0, real.WriteSteps);
+
+            var preview = RunPipeline.Execute(Req("// @writes true\nreturn 1;", r => r.DryRun = true), new TestEnvironment { WriteAllowed = true, RealProject = true }, broken);
+            Assert.True(preview.Ok, preview.Error);
+
+            var scratch = RunPipeline.Execute(Req("// @writes true\nreturn 1;"), new TestEnvironment { WriteAllowed = true }, broken);
+            Assert.True(scratch.Ok, scratch.Error);
+            Assert.False(scratch.AuditOk);
+            Assert.Contains(scratch.Warnings, w => w.Contains("audit"));
+        }
+
+        [Fact]
+        public void Audit_start_records_the_final_write_decision()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "eplanmcp-audit-" + Guid.NewGuid().ToString("N"));
+            // The gate is open (scratch) but the script does not declare writes: it runs read-only.
+            var res = RunPipeline.Execute(Req("return 1;"), new TestEnvironment { WriteAllowed = true }, new AuditLog(dir));
+            Assert.True(res.Ok, res.Error);
+            Assert.True(res.AuditOk);
+            var start = File.ReadAllLines(Directory.GetFiles(dir, "*.jsonl").Single()).Single(l => l.Contains("\"event\":\"start\""));
+            Assert.Contains("\"write_allowed\":false", start);
+        }
+
+        [Fact]
+        public void A_failure_closing_the_session_after_the_run_is_a_warning_not_a_host_error()
+        {
+            var res = RunPipeline.Execute(Req("// @writes true\nreturn 5;"), new TestEnvironment { WriteAllowed = true, DisposeThrows = true }, Audit);
+            Assert.True(res.Ok, res.Error);
+            Assert.Equal(5, ((JsonNode)res.Result!).GetValue<int>());
+            Assert.NotNull(res.UndoDescription);
+            Assert.Contains(res.Warnings, w => w.Contains("close failed"));
+        }
+
+        [Fact]
+        public void Dynamic_is_rejected()
+        {
+            var res = RunPipeline.Execute(Req("dynamic d = \"abc\";\nreturn d.Length;"), new TestEnvironment(), Audit);
+            Assert.Contains(res.Diagnostics, d => d.Id == "EMCP005");
+            var cast = RunPipeline.Execute(Req("object o = \"abc\";\nvar n = ((dynamic)o).Length;\nreturn 1;"), new TestEnvironment(), Audit);
+            Assert.Contains(cast.Diagnostics, d => d.Id == "EMCP005");
+        }
+
+        [Fact]
+        public void Denied_member_is_found_through_a_derived_type()
+        {
+            const string src = "public class P : System.Diagnostics.Process { public new bool Start() => false; }\n" +
+                               "public static class Script { public static object Run(EplanMcp.Scripting.Core.Tests.TestContext ctx) => new P().Start(); }\n";
+            var res = RunPipeline.Execute(Req(src), new TestEnvironment(), Audit);
+            Assert.Contains(res.Diagnostics, d => d.Id == "EMCP001");
+        }
+
+        [Fact]
+        public void Comments_and_strings_do_not_make_a_snippet_a_full_unit()
+        {
+            Assert.True(SourceComposer.IsSnippet("// public static class X { public static object Run(object ctx) { } }\nreturn 1;"));
+            Assert.True(SourceComposer.IsSnippet("var s = \"class X { static object Run(\";\nreturn s;"));
+            Assert.True(SourceComposer.IsSnippet("/* class X { static void Run( */ return 1;"));
+            Assert.False(SourceComposer.IsSnippet("public static class Script { public static object Run(object ctx) => 1; }"));
+            var res = RunPipeline.Execute(Req("// see class Script { static object Run( }\nreturn 3;"), new TestEnvironment(), Audit);
+            Assert.True(res.Ok, res.Error);
+        }
+
+        [Fact]
+        public void Output_path_stays_in_the_run_folder_for_a_run_that_may_not_write()
+        {
+            var run = Path.Combine(Path.GetTempPath(), "eplanmcp-run");
+            Assert.Equal(Path.Combine(run, "a.json"), OutputPath.Resolve(run, false, null, "a.json"));
+            Assert.Equal(Path.Combine(run, "sub", "b.json"), OutputPath.Resolve(run, false, Path.Combine("sub", "b.json"), "a.json"));
+            Assert.Throws<ArgumentException>(() => OutputPath.Resolve(run, false, Path.Combine(Path.GetTempPath(), "elsewhere.json"), "a.json"));
+            Assert.Throws<ArgumentException>(() => OutputPath.Resolve(run, false, Path.Combine("..", "up.json"), "a.json"));
+            Assert.Throws<ArgumentException>(() => OutputPath.Resolve(run, false, run + "10" + Path.DirectorySeparatorChar + "x.json", "a.json"));
+        }
+
+        [Fact]
+        public void Output_path_of_a_writing_run_never_lands_in_eplan_data()
+        {
+            var run = Path.Combine(Path.GetTempPath(), "eplanmcp-run");
+            var elsewhere = Path.Combine(Path.GetTempPath(), "out", "report.json");
+            Assert.Equal(elsewhere, OutputPath.Resolve(run, true, elsewhere, "a.json"));
+            Assert.Throws<ArgumentException>(() => OutputPath.Resolve(run, true, Path.Combine(Path.GetTempPath(), "p.edb", "x.json"), "a.json"));
+            Assert.Throws<ArgumentException>(() => OutputPath.Resolve(run, true, Path.Combine(Path.GetTempPath(), "p.elk"), "a.json"));
+            Assert.Throws<ArgumentException>(() => OutputPath.Resolve(run, true, Path.Combine(Path.GetTempPath(), "lib.SLK"), "a.json"));
+            Assert.Throws<ArgumentException>(() => OutputPath.Resolve(run, true, Path.Combine(Path.GetTempPath(), "x.sdb"), "a.json"));
+        }
+
+        [Fact]
+        public void Reference_set_is_reused_while_nothing_new_is_loaded()
+        {
+            var a = ReferenceSet.FromCurrentProcess();
+            var b = ReferenceSet.FromCurrentProcess();
+            Assert.Same(a, b);
+        }
+
+        [Fact]
+        public void Unload_wait_has_a_bounded_budget()
+        {
+            var alive = new object();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            Assert.False(ScriptRunner.WaitForUnload(new WeakReference(alive)));
+            Assert.InRange(sw.ElapsedMilliseconds, 500, 5000);   // about a second of retries, not forever
+            GC.KeepAlive(alive);
         }
 
         [Fact]
@@ -182,9 +335,9 @@ namespace EplanMcp.Scripting.Core.Tests
         [Fact]
         public void Approval_hash_covers_args_and_helpers()
         {
-            var a = Approval.Hash("src", new string[0], "{\"x\":1}");
-            Assert.NotEqual(a, Approval.Hash("src", new string[0], "{\"x\":2}"));
-            Assert.NotEqual(a, Approval.Hash("src", new[] { "helper" }, "{\"x\":1}"));
+            var a = Approval.Hash("src", new string[0], "{\"x\":1}", "p.elk", false);
+            Assert.NotEqual(a, Approval.Hash("src", new string[0], "{\"x\":2}", "p.elk", false));
+            Assert.NotEqual(a, Approval.Hash("src", new[] { "helper" }, "{\"x\":1}", "p.elk", false));
             var env = new TestEnvironment();
             var res = RunPipeline.Execute(Req("return ctx.Args.Count;", r => { r.ArgsCanonical = "{\"x\":1}"; r.Args = new Dictionary<string, object?>(); }), env, Audit);
             Assert.Equal(env.LastApprovalHash, res.ApprovalHash);

@@ -33,17 +33,39 @@ namespace EplanMcp.Eplan
             (value as IEnumerable<object?>)?.OfType<Dictionary<string, object?>>().ToList() ?? new List<Dictionary<string, object?>>();
 
         /// <summary>
-        /// Rows from the argument <paramref name="rowsArg"/> (inline JSON array) or, failing that,
-        /// from the file named by <paramref name="fileArg"/>. Throws when neither is given.
+        /// Rows from the argument <paramref name="rowsArg"/> (inline JSON array) or, only when that
+        /// argument is absent, from the file named by <paramref name="fileArg"/>. Throws when neither
+        /// is given, or when <paramref name="rowsArg"/> is given but holds no rows.
         /// </summary>
         public static List<Dictionary<string, object?>> RowsFromArgs(ScriptArgs args, string rowsArg, string fileArg)
         {
-            var inline = args.Json(rowsArg);
-            if (!string.IsNullOrEmpty(inline)) return Rows(inline);
+            if (args.Has(rowsArg)) return RequireRows(args, rowsArg);
             var file = args.String(fileArg);
             if (string.IsNullOrEmpty(file) || !File.Exists(file))
                 throw new ArgumentException($"Pass '{rowsArg}' (a JSON array) or '{fileArg}' (an existing file).");
             return Rows(File.ReadAllText(file!, Encoding.UTF8));
+        }
+
+        /// <summary>
+        /// The rows in argument <paramref name="name"/>: a JSON array of objects, or a string holding
+        /// one. Throws when the argument is missing, is not JSON, or yields no objects, so a mistyped
+        /// argument never reads as "nothing to do".
+        /// </summary>
+        public static List<Dictionary<string, object?>> RequireRows(ScriptArgs args, string name)
+        {
+            var raw = args.Json(name);
+            if (string.IsNullOrWhiteSpace(raw)) throw new ArgumentException($"Missing argument '{name}' (a JSON array of objects).");
+            object? value;
+            try
+            {
+                value = Parse(raw!);
+                if (value is string text) value = Parse(text);   // an array sent as JSON text
+            }
+            catch (JsonException ex) { throw new ArgumentException($"Argument '{name}' is not a JSON array of objects: {ex.Message}"); }
+            var rows = Rows(value);
+            if (rows.Count == 0)
+                throw new ArgumentException($"Argument '{name}' was given but holds no objects; pass a JSON array of objects such as [{{\"name\": ...}}].");
+            return rows;
         }
 
         /// <summary>Writes <paramref name="value"/> as JSON (UTF-8, no BOM), creating the folder;
@@ -56,10 +78,12 @@ namespace EplanMcp.Eplan
             return new FileInfo(path).Length;
         }
 
-        /// <summary>The path to write a run's output to: <paramref name="requested"/> when given, else
-        /// <paramref name="defaultName"/> in the run folder.</summary>
+        /// <summary>The path to write a run's output to: <paramref name="requested"/> when given
+        /// (relative to the run folder), else <paramref name="defaultName"/> in the run folder. A run
+        /// that may not write is kept inside its run folder; a writing run never writes into an EPLAN
+        /// project (*.edb) or onto a .elk/.slk/.sdb file. Throws on a refused path.</summary>
         public static string OutPath(ScriptContext ctx, string? requested, string defaultName) =>
-            string.IsNullOrEmpty(requested) ? Path.Combine(ctx.RunFolder, defaultName) : requested!;
+            OutputPath.Resolve(ctx.RunFolder, ctx.WriteAllowed, requested, defaultName);
 
         /// <summary>A row value as text ("" when absent).</summary>
         public static string Str(IDictionary<string, object?> row, string key) =>

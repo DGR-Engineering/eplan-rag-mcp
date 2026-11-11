@@ -33,12 +33,22 @@ public static class Script
 | `ctx.Budget.Check()` | Call it in every long loop. It is the only way a run stops (time limit or cancel) |
 | `ctx.Progress(done, total, "msg")` | Progress the caller sees in `eplan_script_status` |
 | `ctx.Log("...")` | Lines returned in the result's `log` |
-| `ctx.Lock(obj)` | Lock an object before changing it (writing runs only) |
+| `ctx.Lock(obj)` | Lock an object before changing it (writing runs only; the object must belong to `ctx.Project`) |
 | `ctx.DryRun` | True when the caller asked for a preview: report changes, make none |
 | `ctx.WriteAllowed`, `ctx.RunId`, `ctx.RunFolder` | Run facts; `RunFolder` is yours to write files into |
 
-The run already holds a `LockingStep`. Return plain data: numbers, strings, lists, dictionaries,
-anonymous objects. EPLAN objects come back as their type and text only.
+Project access is already inside a `LockingStep`, but who holds it depends on the runtime:
+
+- **Bootstrap and offline host:** the host takes its own `LockingStep`, which uses manual
+  locking. A write must lock what it changes explicitly with `ctx.Lock(obj)` first.
+- **Add-in:** the run is an EPLAN action, and EPLAN's action context already locks, automatically.
+  The host takes no `LockingStep` of its own there: a nested one switches EPLAN to manual locking
+  and breaks code that relies on the automatic kind.
+
+So call `ctx.Lock(obj)` before every change; it works on both paths.
+
+Return plain data: numbers, strings, lists, dictionaries, anonymous objects. EPLAN objects come
+back as their type and text only.
 
 ## Helpers: `EplanMcp.Eplan`
 
@@ -55,8 +65,8 @@ automatically; a full class adds `using EplanMcp.Eplan;`. The scripts in `dotnet
 | `MacroBoxes` | `Describe`, `Survey`, `Restore`, `Links`, `PrepareInspect` |
 | `TextFit` | `Snapshot`, `ResolvePlacement`, `SetHeight`, `SetBox` for text size and alignment boxes |
 | `Selection`, `Layers`, `SymbolLibraries` | Read the selection, the layer table, a symbol library |
-| `PlainJson` | JSON files and record arguments as plain data (`Parse`, `Rows`, `RowsFromArgs`, `Write`, `OutPath`) |
-| `Safe` | Guarded reads (`Text`, `Get`, `Maybe`, `Field`), `Error`, `RequireWrite` |
+| `PlainJson` | JSON files and record arguments as plain data (`Parse`, `Rows`, `RowsFromArgs`, `RequireRows`, `Write`, `OutPath`) |
+| `Safe` | Guarded reads (`Text`, `Get`, `Maybe`, `Field`), `PlainText`, `Error`, `RequireWrite` |
 
 Property reads are where EPLAN surprises most: reading a property the object does not carry
 throws, an empty value throws from `ToInt()`, and `PropertyValue`'s implicit conversions do not
@@ -64,7 +74,13 @@ apply through reflection or `Convert`. `PropertyReader` handles all three.
 
 Helpers that write take `ctx` and lock through `ctx.Lock` (or call `Safe.RequireWrite`), so they
 refuse a read-only run or a dry run at run time: the compile-time check cannot see inside a
-library. Keep raw EPLAN calls out of a read-only script where a helper exists. An object
+library. Keep raw EPLAN calls out of a read-only script where a helper exists.
+
+`PlainJson.OutPath` keeps a run that may not write inside its run folder (relative paths are
+taken there), and never lets a writing run write into an EPLAN project (`*.edb`) or onto a
+`.elk`, `.slk` or `.sdb` file. A record argument (`rows`, `moves`) that is given but holds no
+objects is an error, not an empty run. Text read through `ToString()` can carry EPLAN's
+language prefix (`??_??@text;`); `Safe.PlainText` removes it. An object
 initializer such as `new PlacementsFilter { Page = page }` assigns an EPLAN property and fails
 the read-only check; `Pages.Placements(page)` does not.
 
@@ -84,6 +100,9 @@ Comment lines at the very top declare what a script is:
 // @unsafe                                 allow APIs the safety check rejects (logged)
 ```
 
+`@unsafe` counts only in a saved library script. In ad-hoc code it is ignored with a warning, and
+the safety check runs as if it were absent.
+
 ## Writing
 
 A script that changes anything must declare `// @writes true`. Then:
@@ -92,9 +111,15 @@ A script that changes anything must declare `// @writes true`. Then:
   `eplan_scratch_project_create`. A writing script may touch only `ctx.Project`: `ProjectManager`
   and the selection are rejected, and a run that changes which projects are open fails.
 - **Real projects:** only a saved library script, with `allow_real_project=True` and the
-  `confirm_code` from a `compile_only=True` run of the same script, arguments and helpers, after the
-  user approved it. Take a backup first.
-- Read-only runs reject EPLAN writes at compile time (`EMCP002`).
+  `confirm_code` from a `compile_only=True` run of the same script, arguments, helpers, target
+  project and `dry_run` value, after the user approved it. The arguments must be sent canonical
+  (`args_canonical`). The run is refused if its audit record cannot be written (`audit_ok`).
+  Take a backup first.
+- A writing script may not use `ProjectManager`, the selection, `CommandLineInterpreter` or
+  `ActionManager` (`EMCP004`): they reach other projects.
+- Read-only runs reject EPLAN writes at compile time (`EMCP002`): write-verb methods, assignments,
+  and `++` / `--` on EPLAN properties.
+- `dynamic` is rejected everywhere (`EMCP005`): calls through it bypass the check.
 - Each writing run is one undo step named `EplanMcp <tool> <run id>`. Undo is best effort.
 
 The safety check is a guard against mistakes, not a sandbox: a script is C# running in EPLAN.

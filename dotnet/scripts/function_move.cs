@@ -19,7 +19,8 @@ public static class Script
         var page = Pages.Require(project, ctx.Args.Require("page"), allowPartial: true);
         var functions = Functions.OnPage(page);
         var moved = new List<object>();
-        foreach (var spec in PlainJson.Rows(ctx.Args.Json("moves")))
+        // RequireRows: a 'moves' that parses to nothing is an error, never "moved nothing, ok".
+        foreach (var spec in PlainJson.RequireRows(ctx.Args, "moves"))
         {
             ctx.Budget.Check();
             string name = PlainJson.Str(spec, "name");

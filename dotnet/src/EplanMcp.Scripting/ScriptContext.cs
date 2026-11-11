@@ -11,7 +11,8 @@ namespace EplanMcp.Scripting
     /// <summary>
     /// Everything a script gets. Scripts reach EPLAN through this object rather than through
     /// <c>ActionCallingContext</c> or the selection, which is what lets one script run in the add-in,
-    /// the bootstrap and (later) the offline host. The run already holds a <see cref="LockingStep"/>.
+    /// the bootstrap and the offline host. Project access is already inside a <see cref="LockingStep"/>:
+    /// the host's own on the bootstrap and offline paths, EPLAN's action lock in the add-in.
     /// </summary>
     public sealed class ScriptContext
     {
@@ -64,13 +65,25 @@ namespace EplanMcp.Scripting
             Project ?? throw new InvalidOperationException("No project to act on. Open a project (a scratch clone for writes) or pass the 'project' argument.");
 
         /// <summary>Locks an object for writing (SmartLock also locks the parent page). Refuses when
-        /// the run may not write or is a dry run.</summary>
+        /// the run may not write, is a dry run, or the object does not belong to <see cref="Project"/>
+        /// (the write gate approved that project only).</summary>
         public T Lock<T>(T obj) where T : StorableObject
         {
             if (!WriteAllowed) throw new InvalidOperationException("This run may not write. Use a scratch clone, and declare '// @writes true'.");
             if (DryRun) throw new InvalidOperationException("Dry run: report the change instead of making it (check ctx.DryRun).");
+            if (obj == null) throw new ArgumentNullException(nameof(obj));
+            string? owner = obj.Project?.ProjectLinkFilePath, target = Project?.ProjectLinkFilePath;
+            if (!SameProject(owner, target))
+                throw new InvalidOperationException($"This object belongs to {(owner == null ? "no project" : "project '" + owner + "'")}, not to the run's project '{target}'. A run may change only its own project.");
             obj.SmartLock();
             return obj;
+        }
+
+        private static bool SameProject(string? a, string? b)
+        {
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
+            try { return string.Equals(System.IO.Path.GetFullPath(a), System.IO.Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase); }
+            catch { return string.Equals(a, b, StringComparison.OrdinalIgnoreCase); }
         }
     }
 

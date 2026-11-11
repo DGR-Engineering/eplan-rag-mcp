@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using EplanMcp.Scripting;
 
 namespace EplanMcp.Eplan
@@ -45,6 +46,25 @@ namespace EplanMcp.Eplan
         {
             try { action(); }
             catch (Exception) { }
+        }
+
+        private static readonly Regex LanguagePrefix = new Regex(@"^[A-Za-z?]{2}_[A-Za-z?]{2}@");
+        private static readonly Regex LanguageSegment = new Regex(@";[A-Za-z?]{2}_[A-Za-z?]{2}@");
+
+        /// <summary>
+        /// A text read through ToString() as the user sees it. EPLAN stores a text with no language
+        /// as a one-entry MultiLangString, which reads back as "??_??@text;" (or "de_DE@text;"):
+        /// the language prefix and the closing ';' go. A text with several languages, and any text
+        /// without such a prefix, comes back unchanged. Null reads as "".
+        /// </summary>
+        public static string PlainText(string? text)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            var m = LanguagePrefix.Match(text);
+            if (!m.Success) return text!;
+            var rest = text!.Substring(m.Length);
+            if (rest.EndsWith(";", StringComparison.Ordinal)) rest = rest.Substring(0, rest.Length - 1);
+            return LanguageSegment.IsMatch(rest) ? text : rest;
         }
 
         /// <summary>"ExceptionType: message", the form every report uses.</summary>

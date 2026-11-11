@@ -19,19 +19,30 @@ namespace EplanMcp.Scripting
         /// <summary>Runs the request file and writes the result file.</summary>
         public static void Run(string requestPath, string resultPath, string runtime, string? hostDir = null)
         {
-            RunResult result;
+            string text;
             try
             {
                 var req = Json.Deserialize<RunRequest>(File.ReadAllText(requestPath, Encoding.UTF8))
                           ?? throw new InvalidDataException("The request file is empty.");
                 if (string.IsNullOrEmpty(req.RunFolder)) req.RunFolder = Path.GetDirectoryName(resultPath) ?? "";
-                result = RunPipeline.Execute(req, new EplanEnvironment(runtime, hostDir == null ? null : new[] { hostDir }));
+                var result = RunPipeline.Execute(req, new EplanEnvironment(runtime, hostDir == null ? null : new[] { hostDir }));
+                try { text = Json.Serialize(result); }
+                catch (Exception e)
+                {
+                    // The run happened: say so, even if its full result cannot be written.
+                    text = Json.Serialize(new RunResult
+                    {
+                        CoreVersion = RunPipeline.CoreVersion, Runtime = runtime, RunId = result.RunId, Ok = false, Phase = result.Phase,
+                        Error = "The result could not be serialized: " + e.Message + (result.Ok ? " (the script itself ran without error)" : " | " + result.Error),
+                        Warnings = result.Warnings, UndoDescription = result.UndoDescription, Project = result.Project,
+                    });
+                }
             }
             catch (Exception e)
             {
-                result = new RunResult { CoreVersion = RunPipeline.CoreVersion, Runtime = runtime, Phase = "request", Error = "Could not read the request: " + e.Message };
+                text = Json.Serialize(new RunResult { CoreVersion = RunPipeline.CoreVersion, Runtime = runtime, Phase = "request", Error = "Could not read the request: " + e.Message });
             }
-            TryWrite(resultPath, Json.Serialize(result));
+            TryWrite(resultPath, text);
         }
 
         /// <summary>Never throws into EPLAN: a result that cannot be written is lost, and the

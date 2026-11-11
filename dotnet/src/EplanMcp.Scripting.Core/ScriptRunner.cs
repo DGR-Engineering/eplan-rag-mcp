@@ -71,14 +71,16 @@ namespace EplanMcp.Scripting.Core
         }
 
         /// <summary>True when the script's context was collected. Call after <see cref="Run"/> has
-        /// returned, so no stack frame holds a reference.</summary>
-        public static bool WaitForUnload(WeakReference? weak, int attempts = 10)
+        /// returned, so no stack frame holds a reference. Waits up to about a second: EPLAN's own
+        /// AssemblyLoad subscribers hold a reference to a new assembly for a short while.</summary>
+        public static bool WaitForUnload(WeakReference? weak, int attempts = 20, int pauseMs = 50)
         {
             if (weak == null) return true;
             for (int i = 0; i < attempts && weak.IsAlive; i++)
             {
                 GC.Collect();
                 GC.WaitForPendingFinalizers();
+                if (weak.IsAlive && i < attempts - 1) System.Threading.Thread.Sleep(pauseMs);
             }
             return !weak.IsAlive;
         }

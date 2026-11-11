@@ -47,9 +47,10 @@ namespace EplanMcp.Contracts
         public bool CompileOnly { get; set; }
         public bool DryRun { get; set; }
 
-        /// <summary>Real-project writes need all three: this flag, a saved script, and
-        /// <see cref="Confirm"/> equal to the start of the approval hash (source + helpers + args)
-        /// a compile_only run returned and the user approved.</summary>
+        /// <summary>Real-project writes need all of: this flag, a saved script, canonical arguments
+        /// (<see cref="ArgsCanonical"/>), and <see cref="Confirm"/> equal to the start of the approval
+        /// hash (source + helpers + args + target project + dry_run) a compile_only run of the same
+        /// request returned and the user approved.</summary>
         public bool AllowRealProject { get; set; }
         public string? Confirm { get; set; }
 
@@ -103,10 +104,14 @@ namespace EplanMcp.Contracts
         public string? UndoDescription { get; set; }
         public string? SourceHash { get; set; }
 
-        /// <summary>Hash of source + helpers + canonical args; its first 16 hex digits are the
-        /// confirm code for a real-project write.</summary>
+        /// <summary>Hash of source + helpers + canonical args + the resolved target project + the
+        /// dry_run flag; its first 16 hex digits are the confirm code for a real-project write.</summary>
         public string? ApprovalHash { get; set; }
         public bool? Unloaded { get; set; }
+
+        /// <summary>False when the audit start line could not be written. A run that would write
+        /// to a real (non-scratch) project is refused then; other runs go ahead with a warning.</summary>
+        public bool? AuditOk { get; set; }
         public long DurationMs { get; set; }
         public ScriptManifest? Manifest { get; set; }
     }

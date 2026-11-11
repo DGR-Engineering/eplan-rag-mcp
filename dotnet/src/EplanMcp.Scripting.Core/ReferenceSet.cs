@@ -31,12 +31,49 @@ namespace EplanMcp.Scripting.Core
             References = paths.Values.Select(p => (MetadataReference)MetadataReference.CreateFromFile(p)).ToList();
         }
 
+        private static readonly object CacheLock = new object();
+        private static string? _cachedKey;
+        private static ReferenceSet? _cached;
+
         /// <param name="searchDirs">Folders searched for loaded assemblies that have no file location
         /// (loaded from bytes by the bootstrap).</param>
         /// <param name="extra">Additional assembly paths from the request.</param>
+        /// <remarks>Cached: rebuilt only when the set of (non-script) loaded assemblies grows or
+        /// shrinks, or the search folders or extra references change, so a warm run does not rescan
+        /// the runtime folder.</remarks>
         public static ReferenceSet FromCurrentProcess(IEnumerable<string>? searchDirs = null, IEnumerable<string>? extra = null)
         {
-            var dirs = (searchDirs ?? Array.Empty<string>()).Where(Directory.Exists).ToList();
+            var dirList = (searchDirs ?? Array.Empty<string>()).ToList();
+            var extraList = (extra ?? Array.Empty<string>()).ToList();
+            var key = CacheKey(dirList, extraList);
+            lock (CacheLock)
+            {
+                if (_cached != null && _cachedKey == key) return _cached;
+                _cached = Build(dirList, extraList);
+                _cachedKey = key;
+                return _cached;
+            }
+        }
+
+        /// <summary>The count of loaded assemblies a reference set takes (collectible script
+        /// assemblies come and go with every run, so they do not count), plus the folders and the
+        /// extra references' file stamps.</summary>
+        internal static string CacheKey(IEnumerable<string> searchDirs, IEnumerable<string> extra)
+        {
+            int count = AppDomain.CurrentDomain.GetAssemblies().Count(a =>
+                !a.IsDynamic && !(System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(a)?.IsCollectible ?? false));
+            return count + "|" + string.Join(";", searchDirs) + "|" + string.Join(";", extra.Select(Stamp));
+        }
+
+        private static string Stamp(string path)
+        {
+            try { var f = new FileInfo(path); return path + ":" + f.Length + ":" + f.LastWriteTimeUtc.Ticks; }
+            catch (Exception) { return path; }
+        }
+
+        private static ReferenceSet Build(IEnumerable<string> searchDirs, IEnumerable<string> extra)
+        {
+            var dirs = searchDirs.Where(Directory.Exists).ToList();
             var paths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             var identity = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -66,7 +103,7 @@ namespace EplanMcp.Scripting.Core
                 foreach (var p in Directory.EnumerateFiles(runtimeDir!, "*.dll"))
                     AddIfManaged(paths, p);
 
-            foreach (var p in extra ?? Array.Empty<string>())
+            foreach (var p in extra)
                 if (File.Exists(p)) paths[Path.GetFileNameWithoutExtension(p)] = Path.GetFullPath(p);
 
             var fp = string.Join(";", identity.Select(kv => kv.Key + "=" + kv.Value));
@@ -102,13 +139,25 @@ namespace EplanMcp.Scripting.Core
 
     /// <summary>
     /// What a user approves before a write to a real project: the script source, every helper
-    /// source and the exact argument text, joined with NUL. The server computes nothing itself; it
-    /// shows the first 16 hex digits a compile_only run returned and passes them back as confirm.
+    /// source, the exact argument text, the resolved target project and the dry_run flag, joined
+    /// with NUL. The server computes nothing itself; it shows the first 16 hex digits a compile_only
+    /// run of the same request returned and passes them back as confirm. So an approval for one
+    /// project, or for a dry run, never confirms a write to another project or a real run.
     /// </summary>
     public static class Approval
     {
-        public static string Hash(string source, IEnumerable<string> helperTexts, string? argsCanonical) =>
-            Hashing.Sha256Hex(source + "\0" + string.Join("\0", helperTexts) + "\0" + (argsCanonical ?? "{}"));
+        public static string Hash(string source, IEnumerable<string> helperTexts, string? argsCanonical, string? project, bool dryRun) =>
+            Hashing.Sha256Hex(source + "\0" + string.Join("\0", helperTexts) + "\0" + (argsCanonical ?? "{}")
+                + "\0" + NormalizeProject(project) + "\0" + (dryRun ? "dry_run" : "run"));
+
+        /// <summary>The project path in one spelling: full path, upper case ("" for none), so a
+        /// compile_only run on one runtime and the write on another agree.</summary>
+        internal static string NormalizeProject(string? project)
+        {
+            if (string.IsNullOrWhiteSpace(project)) return "";
+            try { project = Path.GetFullPath(project); } catch (Exception) { }
+            return project!.ToUpperInvariant();
+        }
     }
 
     public static class Hashing

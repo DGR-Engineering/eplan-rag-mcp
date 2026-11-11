@@ -1,7 +1,9 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using System.Text.RegularExpressions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace EplanMcp.Scripting.Core
 {
@@ -22,10 +24,11 @@ namespace EplanMcp.Scripting.Core
     /// </summary>
     public static class SourceComposer
     {
-        private static readonly Regex RunMethod = new Regex(@"\bstatic\b[^;{]*\bRun\s*\(", RegexOptions.Compiled);
-        private static readonly Regex TypeDecl = new Regex(@"\b(class|struct|record)\s+\w+", RegexOptions.Compiled);
-
-        public static bool IsSnippet(string source) => !(TypeDecl.IsMatch(source) && RunMethod.IsMatch(source));
+        /// <summary>False when the source declares a type with a static <c>Run</c> method. Parsed,
+        /// not pattern-matched, so a comment or string that mentions one does not count.</summary>
+        public static bool IsSnippet(string source) =>
+            !CSharpSyntaxTree.ParseText(source).GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>()
+                .Any(m => m.Identifier.ValueText == "Run" && m.Modifiers.Any(SyntaxKind.StaticKeyword) && m.Parent is TypeDeclarationSyntax);
 
         public static string Compose(string source, string sourceName, SnippetOptions options)
         {

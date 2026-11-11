@@ -5,6 +5,9 @@
 // @arg      max  int     optional   Cables reported (default 10)
 // @writes   false
 // @needs    session
+//
+// At most 200 shield functions are listed ("shield_functions_capped" says when there were more);
+// "max" limits the cables.
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -23,10 +26,12 @@ public static class Script
         var finder = new DMObjectsFinder(project);
         var functions = Functions.All(project);
 
+        const int shieldLimit = 200;
         var shields = new List<object>();
+        bool shieldsCapped = false;
         foreach (var s in functions.OfType<Shield>())
         {
-            if (shields.Count >= 200) break;
+            if (shields.Count >= shieldLimit) { shieldsCapped = true; break; }
             shields.Add(new Dictionary<string, object?>
             {
                 ["name"] = Safe.Text(() => s.Name),
@@ -118,6 +123,10 @@ public static class Script
                 ["connections"] = connsByCable.TryGetValue(name, out var cl) ? cl : new List<object>(),
             });
         }
-        return new { project = project.ProjectFullName, shield_functions = shields, cables };
+        return new
+        {
+            project = project.ProjectFullName, shield_functions = shields,
+            shield_functions_limit = shieldLimit, shield_functions_capped = shieldsCapped, cables,
+        };
     }
 }

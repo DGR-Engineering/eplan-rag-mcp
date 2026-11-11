@@ -12,7 +12,7 @@
 // @needs    session
 //
 // Without style or factor nothing is written; the run still needs write permission because the
-// script can write. At most 60 graphics are reported.
+// script can write. Every matching graphic is written; at most 60 are reported ("report_capped").
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -31,13 +31,19 @@ public static class Script
         bool setStyle = ctx.Args.Has("style"), setFactor = ctx.Args.Has("factor");
         bool write = (setStyle || setFactor) && !ctx.DryRun;
 
+        const int reportLimit = 60;
         var rows = new List<object>();
+        int matched = 0, writeErrors = 0;
         foreach (var g in Pages.Placements(page).OfType<GraphicalPlacement>())
         {
+            ctx.Budget.Check();
             if (!(g is Line) && !(g is Arc)) continue;
             PointD a, b;
             try { var bb = g.GetBoundingBox(); a = bb[0]; b = bb[1]; } catch { continue; }
             if (a.X < x0 || a.Y < y0 || b.X > x1 || b.Y > y1) continue;
+            matched++;
+            bool report = rows.Count < reportLimit;
+            if (!report && !write) continue;   // nothing left to do for this one
             var row = new Dictionary<string, object?> { ["type"] = g.GetType().Name, ["box"] = $"({a.X:0.##},{a.Y:0.##})-({b.X:0.##},{b.Y:0.##})" };
             try
             {
@@ -54,11 +60,15 @@ public static class Script
                 row["style"] = (int)p.StyleId; row["factor"] = p.StyleFactor; row["width"] = p.Width;
                 row["colour"] = (int)p.ColorId; row["pattern"] = p.PatternLength;
             }
-            catch (Exception ex) { row["pen_error"] = Safe.Error(ex); }
+            catch (Exception ex) { row["pen_error"] = Safe.Error(ex); if (write) writeErrors++; }
+            if (!report) continue;
             row["layer"] = Safe.Text(() => g.Layer?.Name);
             rows.Add(row);
-            if (rows.Count >= 60) break;
         }
-        return new { page = page.Name, written = write, graphics = rows };
+        return new
+        {
+            page = page.Name, written = write, matched, write_errors = writeErrors,
+            reported = rows.Count, report_capped = matched > rows.Count, graphics = rows,
+        };
     }
 }

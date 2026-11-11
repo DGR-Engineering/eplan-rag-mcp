@@ -22,17 +22,20 @@ namespace EplanMcp.Scripting.Core
                 ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "EplanMcp", "audit");
         }
 
-        public void Start(string runId, string sourceHash, string source, IDictionary<string, object?> fields) =>
-            Safe(() =>
+        /// <summary>Writes the start line and keeps the source. False (with the reason) when it
+        /// could not: the caller decides whether the run may go ahead without it.</summary>
+        public bool Start(string runId, string sourceHash, string source, IDictionary<string, object?> fields, out string? error) =>
+            Try(() =>
             {
                 var sources = Path.Combine(Directory, "sources");
                 System.IO.Directory.CreateDirectory(sources);
                 var copy = Path.Combine(sources, sourceHash + ".cs");
                 if (!File.Exists(copy)) File.WriteAllText(copy, source, Encoding.UTF8);
                 Append("start", runId, fields);
-            });
+            }, out error);
 
-        public void End(string runId, IDictionary<string, object?> fields) => Safe(() => Append("end", runId, fields));
+        public bool End(string runId, IDictionary<string, object?> fields, out string? error) =>
+            Try(() => Append("end", runId, fields), out error);
 
         private void Append(string ev, string runId, IDictionary<string, object?> fields)
         {
@@ -50,10 +53,11 @@ namespace EplanMcp.Scripting.Core
             File.AppendAllText(file, Json.Serialize(line) + "\n", Encoding.UTF8);
         }
 
-        // Auditing must never be the reason a run fails.
-        private static void Safe(Action a)
+        // Never throws: a failure is reported to the caller, which decides what it means for the run.
+        private static bool Try(Action a, out string? error)
         {
-            try { a(); } catch { }
+            try { a(); error = null; return true; }
+            catch (Exception e) { error = e.GetType().Name + ": " + e.Message; return false; }
         }
     }
 }

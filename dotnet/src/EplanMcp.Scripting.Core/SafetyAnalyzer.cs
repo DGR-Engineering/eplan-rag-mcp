@@ -34,15 +34,19 @@ namespace EplanMcp.Scripting.Core
             "Create", "Remove", "Delete", "Set", "Lock", "SmartLock", "Store", "Move", "Rename", "Insert",
             "Paste", "Update", "Apply", "Assign", "Place", "Import", "Execute", "Copy", "Add", "Clear",
             "Generate", "Renumber", "Translate", "Synchronize", "Upgrade", "Reset", "DockText",
+            "Save", "Change", "Edit", "Replace", "Convert", "Unlock", "Write", "Merge", "Close", "Open",
         };
 
         /// <summary>Ways to reach a project other than ctx.Project. A writing script may not use
         /// them: the write gate checks only the TARGET project is a scratch clone, so a writing
-        /// script must stay inside it (D7).</summary>
+        /// script must stay inside it (D7). Actions run by name act on whatever project EPLAN
+        /// picks, so the action runners count too.</summary>
         private static readonly string[] OtherProjectTypes =
         {
             "Eplan.EplApi.DataModel.ProjectManager",
             "Eplan.EplApi.HEServices.SelectionSet",
+            "Eplan.EplApi.ApplicationFramework.CommandLineInterpreter",
+            "Eplan.EplApi.ApplicationFramework.ActionManager",
         };
 
         /// <param name="readOnly">True when the run may not write: no assignments to EPLAN
@@ -63,7 +67,7 @@ namespace EplanMcp.Scripting.Core
                 {
                     if (!(model.GetSymbolInfo(inv).Symbol is IMethodSymbol m)) continue;
                     var type = m.ContainingType?.ToDisplayString() ?? "";
-                    if (!allowUnsafe && IsDenied(type, m.Name))
+                    if (!allowUnsafe && IsDenied(m.ContainingType, m.Name))
                         found.Add(Make("EMCP001", inv, $"{type}.{m.Name} is not allowed in scripts (it changes open projects, processes or files). Add '// @unsafe' only if you really mean it."));
                     else if (readOnly && IsEplan(type) && IsWriteVerb(m.Name))
                         found.Add(Make("EMCP002", inv, $"{type}.{m.Name} looks like a write, and this run is read-only. Writes need a scratch clone (or a saved script with confirmation on a real project) and '// @writes true'."));
@@ -73,12 +77,16 @@ namespace EplanMcp.Scripting.Core
                 // the explicit write verbs and assignments are checked.
                 if (readOnly)
                 {
-                    foreach (var asg in root.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+                    // Plain and compound assignments (=, +=, ...), and ++ / --.
+                    var writes = root.DescendantNodes().OfType<AssignmentExpressionSyntax>().Select(a => (node: (SyntaxNode)a, target: a.Left))
+                        .Concat(root.DescendantNodes().OfType<PrefixUnaryExpressionSyntax>().Where(IsIncrement).Select(u => (node: (SyntaxNode)u, target: u.Operand)))
+                        .Concat(root.DescendantNodes().OfType<PostfixUnaryExpressionSyntax>().Where(IsIncrement).Select(u => (node: (SyntaxNode)u, target: u.Operand)));
+                    foreach (var (node, left) in writes)
                     {
-                        var target = model.GetSymbolInfo(asg.Left).Symbol;
+                        var target = model.GetSymbolInfo(left).Symbol;
                         var owner = target?.ContainingType?.ToDisplayString() ?? "";
                         if ((target is IPropertySymbol || target is IFieldSymbol) && IsEplan(owner) && !IsHarmlessSetting(owner, target!.Name))
-                            found.Add(Make("EMCP002", asg, $"Assigning {owner}.{target!.Name} is a write, and this run is read-only."));
+                            found.Add(Make("EMCP002", node, $"Assigning {owner}.{target!.Name} is a write, and this run is read-only."));
                     }
                 }
 
@@ -88,13 +96,22 @@ namespace EplanMcp.Scripting.Core
                     {
                         var sym = model.GetSymbolInfo(name).Symbol;
                         var type = sym as ITypeSymbol ?? sym?.ContainingType;
-                        var full = type?.ToDisplayString() ?? "";
-                        if (OtherProjectTypes.Contains(full))
+                        var hit = TypeAndBases(type).FirstOrDefault(t => OtherProjectTypes.Contains(t));
+                        if (hit != null)
                         {
-                            found.Add(Make("EMCP004", name, $"A writing script may only touch ctx.Project; {full} can reach other open projects. Use ctx.Project."));
+                            found.Add(Make("EMCP004", name, $"A writing script may only touch ctx.Project; {hit} can reach other open projects or run actions on them. Use ctx.Project."));
                             break;
                         }
                     }
+                }
+
+                // dynamic dispatch binds at run time, so no other check here can see what it calls.
+                if (!allowUnsafe)
+                {
+                    var dyn = root.DescendantNodes().OfType<ExpressionSyntax>()
+                        .FirstOrDefault(e => model.GetTypeInfo(e).Type?.TypeKind == TypeKind.Dynamic);
+                    if (dyn != null)
+                        found.Add(Make("EMCP005", dyn, "'dynamic' is not allowed in scripts: calls through it bypass the safety check. Use the EPLAN types directly."));
                 }
 
                 foreach (var loop in root.DescendantNodes().Where(IsUnboundedLoop))
@@ -104,8 +121,23 @@ namespace EplanMcp.Scripting.Core
             return found;
         }
 
-        private static bool IsDenied(string type, string member) =>
-            Denied.Any(d => d.type == type && (d.members.Contains("*") || d.members.Contains(member)));
+        /// <summary>Denied on the declaring type or any of its base types, so a derived type does
+        /// not hide a denied member.</summary>
+        private static bool IsDenied(INamedTypeSymbol? type, string member)
+        {
+            var names = TypeAndBases(type).ToList();
+            return Denied.Any(d => names.Contains(d.type) && (d.members.Contains("*") || d.members.Contains(member)));
+        }
+
+        private static IEnumerable<string> TypeAndBases(ITypeSymbol? type)
+        {
+            for (var t = type; t != null; t = t.BaseType)
+                yield return t.OriginalDefinition.ToDisplayString();
+        }
+
+        private static bool IsIncrement(ExpressionSyntax e) =>
+            e.IsKind(SyntaxKind.PreIncrementExpression) || e.IsKind(SyntaxKind.PreDecrementExpression)
+            || e.IsKind(SyntaxKind.PostIncrementExpression) || e.IsKind(SyntaxKind.PostDecrementExpression);
 
         private static bool IsEplan(string type) => type.StartsWith("Eplan.", StringComparison.Ordinal);
 

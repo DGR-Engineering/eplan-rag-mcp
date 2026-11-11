@@ -1,5 +1,5 @@
 // @tool     text_create
-// @desc     Creates a free text on a page with Text.Create and reads its contents back with every character code, to see how line breaks are stored.
+// @desc     Creates a free text on a page with Text.Create and reads its contents back with every character code, to see how line breaks are stored. read_back has EPLAN's language prefix removed; read_back_raw is the text as stored.
 // @schema   1
 // @arg      page    string  required   Page Name or IdentifyingName (exact)
 // @arg      text    string  optional   The text (default empty)
@@ -27,12 +27,14 @@ public static class Script
         var t = new Text();
         t.Create(page, text, ctx.Args.Number("height", 2.5));
         t.Location = new PointD(ctx.Args.Number("x", 100.0), ctx.Args.Number("y", 100.0));
-        string back = t.Contents?.ToString() ?? "";
+        string raw = t.Contents?.ToString() ?? "";
+        string back = Safe.PlainText(raw);
         return new
         {
             page = page.Name,
             sent_codes = text.Select(c => (int)c).ToList(),
             read_back = back,
+            read_back_raw = raw,
             read_back_codes = back.Select(c => (int)c).ToList(),
         };
     }
