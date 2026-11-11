@@ -6,14 +6,14 @@
 // @arg      height        number  optional   New height in mm (or -16002 for "from layer"); give height or factor
 // @arg      factor        number  optional   Multiply the current height by this (> 0); give height or factor
 // @arg      target        enum(height,font_size) default=height  Write the text height, or the font size property
-// @arg      allow_shared  bool    optional   Allow writing the font size of a text that belongs to a symbol variant (changes every instance of it). The height of such a text is always refused: EPLAN write-protects it
+// @arg      allow_shared  bool    optional   Kept for compatibility: a text that belongs to a symbol variant is always refused, because EPLAN write-protects its height and font size
 // @writes   true
 // @needs    session
 //
 // Writes only to a scratch clone (eplan_scratch_project_create). The result has the values before
 // and after; "sticks" is false, and not_stuck names the value, when EPLAN did not keep it. A property
 // text shown from its symbol variant (shared_placements=true in text_placements) cannot take a
-// height: use text_set_box, or make the symbol's placements local in EPLAN.
+// height or font size: use text_set_box, or make the symbol's placements local in EPLAN.
 using EplanMcp.Eplan;
 using EplanMcp.Scripting;
 

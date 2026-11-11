@@ -230,7 +230,7 @@ the bootstrap, `either` also offline, `gui` needs the interactive EPLAN window.
 | `line_styles` | Lines and arcs on a page or in an area, with style, factor, width | R | all four of `x0`..`y1` or none (a partial area is refused); `limit` (default 200) | session |
 | `macrobox_snapshot` | Every macro box to a snapshot file | R (file) | | session |
 | `parts_snapshot` | Every function's parts to a snapshot file (schema 2: with object `id`, `full_dt`, `definition`, `variant`) | R (file) | `page_prefix` | session |
-| `text_set_height` | Height of one text: absolute or a factor | W | `handle` from `text_placements`; the height of a variant (shared) property text is refused; `allow_shared` for its font size | session |
+| `text_set_height` | Height of one text: absolute or a factor | W | `handle` from `text_placements`; a variant (shared) property text is always refused (EPLAN write-protects its height and font size) | session |
 | `text_set_box` | Alignment-box settings of one text | W | `handle`; only settings passed are written | session |
 | `text_create` | Places a free text, reads it back, returns handle and undo call | W | `page`, `text` (not blank), `x`, `y` required | session |
 | `line_styles_set` | Style, factor or width of every line and arc in an area | W | area and `limit` required | session |

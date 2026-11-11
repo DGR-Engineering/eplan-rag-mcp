@@ -56,7 +56,7 @@ It exposes **253 tools** (full tool-by-tool reference: [the project wiki](https:
   Library scripts (name: args; `*` = required):
   - Texts: `text_placements` (page*, symbol_prefix, include_free_texts),
     `text_set_height` (page*, handle*, height | factor, target=height|font_size, allow_shared;
-    the height of a property text shown from its symbol variant is always refused, use
+    the height and font size of a property text shown from its symbol variant are always refused, use
     `text_set_box` or make the placements local in EPLAN),
     `text_set_box` (page*, handle*, has_box, box_fixed_width, box_fixed_height,
     fitting_permitted, never_hyphenate, remove_breaks, box_width, box_height, allow_shared),

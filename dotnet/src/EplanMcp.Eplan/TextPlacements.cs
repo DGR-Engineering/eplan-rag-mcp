@@ -107,9 +107,8 @@ namespace EplanMcp.Eplan
                     d["property_index"] = Safe.Maybe(() => (int)pp.DisplayedProperty.Index);
                     d["display_string"] = Safe.Text(() => pp.GetDisplayString());
                     // The PropertyPlacement overload with true returns coordinates relative to the
-                    // placement; false returns page coordinates. An empty value has no extent.
-                    if (string.IsNullOrEmpty(d["display_string"] as string)) { d["bounds"] = null; d["bounds_reason"] = "the text shows an empty value, so it has no extent"; }
-                    else AddBox(d, "bounds", () => pp.GetBoundingBox(false));
+                    // placement; false returns page coordinates.
+                    AddBox(d, "bounds", () => pp.GetBoundingBox(false));
                     texts.Add(d);
                 }
             }
@@ -203,18 +202,18 @@ namespace EplanMcp.Eplan
         }
 
         /// <summary>
-        /// Null unless the text is a property text shown from its symbol VARIANT (not local) and
-        /// <paramref name="target"/> is "height": EPLAN keeps that placement in the variant and refuses
-        /// the TextBase.Height setter ("The database is write-protected"); the API offers no way to set
-        /// a variant placement's height, only to make one instance local
+        /// Null unless the text is a property text shown from its symbol VARIANT (not local): EPLAN
+        /// keeps that placement in the variant and refuses both the TextBase.Height setter and the
+        /// font size property ("The database is write-protected", measured on EPLAN 2027). The API
+        /// offers no way to set a variant placement's height, only to make one instance local
         /// (SymbolReference.SwitchLocalPropertyPlacements), which is a different change.
         /// </summary>
-        public static string? SharedHeightRefusal(SymbolReference? owner, string target)
+        public static string? SharedHeightRefusal(SymbolReference? owner)
         {
-            if (owner == null || target != "height") return null;
+            if (owner == null) return null;
             bool local = Safe.Maybe(() => owner.UseLocalPropertyPlacements) ?? true;
             return local ? null :
-                "EPLAN does not allow changing the height of a property text that the symbol shows from its variant " +
+                "EPLAN does not allow changing the height or font size of a property text that the symbol shows from its variant " +
                 "(shared_placements=true): the variant's placements are write-protected, so nothing was written. Use " +
                 "text_set_box (its box settings reach the variant), or make this symbol's property placements local in " +
                 "EPLAN first (only this instance changes), then set the height.";
@@ -234,7 +233,7 @@ namespace EplanMcp.Eplan
             if (height.HasValue && !(height.Value > 0) && Math.Abs(height.Value - FromLayer) > 0.0001)
                 return Fail(data, $"height must be greater than 0 mm, or {FromLayer} for 'from layer'.");
             if (target != "height" && target != "font_size") return Fail(data, "target must be 'height' or 'font_size'.");
-            var refusal = SharedRefusal(owner, allowShared) ?? SharedHeightRefusal(owner, target);
+            var refusal = SharedRefusal(owner, allowShared) ?? SharedHeightRefusal(owner);
             if (refusal != null) return Fail(data, refusal);
 
             double? before = Safe.Maybe(() => text.Height);
@@ -346,6 +345,13 @@ namespace EplanMcp.Eplan
             {
                 var box = read();
                 if (box == null || box.Length < 2) { d[key] = null; return; }
+                if (box[0].X == 0 && box[0].Y == 0 && box[1].X == 0 && box[1].Y == 0)
+                {
+                    // Not a real box at the page origin: EPLAN gives no extent for this text.
+                    d[key] = null;
+                    d[key + "_reason"] = "EPLAN reports no extent (0,0,0,0): the text shows an empty value, or EPLAN computes no bounds for it (seen on some symbol types)";
+                    return;
+                }
                 d[key] = new Dictionary<string, object?>
                 {
                     ["x1"] = box[0].X, ["y1"] = box[0].Y, ["x2"] = box[1].X, ["y2"] = box[1].Y,
