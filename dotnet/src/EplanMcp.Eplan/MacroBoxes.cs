@@ -475,11 +475,20 @@ namespace EplanMcp.Eplan
             {
                 if (!(box.GetGraphics() is GraphicalPlacement g)) return;
                 // LayerId is read-only; Layer is set by NAME, because a layer id need not mean the
-                // same layer in another project. The constructor binds to the existing layer.
+                // same layer in another project. It must be the project's own layer object: a
+                // new GraphicalLayer(name, ...) is refused with S511249 "Invalid layer cannot be
+                // transferred" (measured on EPLAN 2027.0.3).
                 Try(errors, "layer", () =>
                 {
                     var name = PlainJson.Str(row, "layer_name");
-                    if (name.Length > 0) g.Layer = new GraphicalLayer(name, new MultiLangString());
+                    if (name.Length == 0) return;
+                    var layer = (box.Project?.LayerTable?.Layers ?? Array.Empty<GraphicalLayer>())
+                        .FirstOrDefault(l => string.Equals(Safe.Text(() => l.Name), name, StringComparison.OrdinalIgnoreCase));
+                    if (layer == null) throw new InvalidOperationException($"the project has no layer named '{name}'");
+                    g.Layer = layer;
+                    var after = Safe.Text(() => g.Layer.Name);
+                    if (!string.Equals(after, name, StringComparison.OrdinalIgnoreCase))
+                        throw new InvalidOperationException($"read back '{after}', not '{name}'");
                 });
                 Try(errors, "pen", () =>
                 {
