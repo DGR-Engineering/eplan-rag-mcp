@@ -29,12 +29,17 @@ with script_status (progress, heartbeat) and stop with script_cancel. A script s
 calls ctx.Budget.Check(): EPLAN cannot abort a running script.
 """
 
+import hashlib
 import json
 import os
 import re
+import shutil
+import tempfile
 import threading
 import time
+import urllib.request
 import uuid
+import zipfile
 
 from ._base import _get_connected_manager
 
@@ -52,8 +57,29 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", "..", ".."))
 DOTNET_DIR = os.path.join(_REPO_ROOT, "dotnet")
 
-# Where the built host lives (EplanMcp.Host.AddIn output: DLLs + eplanmcp-manifest.txt).
-HOST_DIR = os.environ.get("EPLAN_MCP_HOST_DIR") or os.path.join(DOTNET_DIR, "artifacts", "host")
+# A git clone has no build output: the host then comes from the GitHub release v<version>,
+# installed per version under ~/.eplan-mcp/host/<version>/ (see ensure_host). Not under AppData:
+# see RUNS_DIR below.
+REPO_URL = "https://github.com/covagashi/eplan-rag-mcp"
+INSTALL_ROOT = os.path.join(os.path.expanduser("~"), ".eplan-mcp", "host")
+_OFFLINE_EXE = "EplanMcp.Host.Offline.exe"
+
+
+def _installed_dirs(version: str = HOST_VERSION):
+    """(host dir, offline dir) of an installed release: the add-on zip keeps its
+    EplanMcp/<version>/BIN + CFG layout under addon/, the offline zip is flat under offline/."""
+    root = os.path.join(INSTALL_ROOT, version)
+    return (os.path.join(root, "addon", "EplanMcp", version, "BIN"), os.path.join(root, "offline"))
+
+
+def _default_dir(env: str, built: str, installed: str) -> str:
+    return os.environ.get(env) or (built if os.path.isdir(built) else installed)
+
+
+# Where the host lives (EplanMcp.Host.AddIn output: DLLs + eplanmcp-manifest.txt): the override,
+# else this checkout's build, else the installed release.
+HOST_DIR = _default_dir("EPLAN_MCP_HOST_DIR", os.path.join(DOTNET_DIR, "artifacts", "host"),
+                        _installed_dirs()[0])
 
 # Per-user run folders: request, result, progress, heartbeat, cancel. Never inside a checkout.
 # NOT under %LOCALAPPDATA% / %APPDATA%: measured on EPLAN 2027.0.3, an ExecuteScript file path
@@ -242,13 +268,140 @@ def _host_version():
         return None
 
 
+# --- Host install from a GitHub release -------------------------------------------------------
+# Assets built by dotnet/pack/pack-release.ps1 and uploaded to the release v<version>.
+_RELEASE_ASSETS = (("EplanMcp-{v}-addon.zip", "addon"), ("EplanMcp-{v}-offline.zip", "offline"))
+_RELEASE_SUMS = "SHA256SUMS.txt"
+_VERSION_RE = re.compile(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?")
+_install_lock = threading.Lock()
+
+
+def _release_url(version: str, name: str) -> str:
+    """URL of a release asset; EPLAN_MCP_RELEASE_URL replaces the repo URL (a fork or mirror)."""
+    base = (os.environ.get("EPLAN_MCP_RELEASE_URL") or REPO_URL).rstrip("/")
+    return f"{base}/releases/download/v{version}/{name}"
+
+
+def _download(url: str, dest: str, timeout: float = 120.0) -> str:
+    """Stream `url` to `dest`; returns the file's SHA-256 (hex)."""
+    digest = hashlib.sha256()
+    with urllib.request.urlopen(url, timeout=timeout) as resp, open(dest, "wb") as f:
+        for chunk in iter(lambda: resp.read(1 << 20), b""):
+            digest.update(chunk)
+            f.write(chunk)
+    return digest.hexdigest()
+
+
+def _safe_extract(zip_path: str, dest: str) -> None:
+    """Extract a zip, refusing it whole if any entry would land outside `dest` (zip-slip)."""
+    root = os.path.realpath(dest)
+    with zipfile.ZipFile(zip_path) as zf:
+        for info in zf.infolist():
+            name = info.filename.replace("\\", "/")
+            parts = name.split("/")
+            target = os.path.realpath(os.path.join(root, *parts))
+            if (name.startswith("/") or ":" in name or ".." in parts
+                    or os.path.commonpath([root, target]) != root):
+                raise ValueError(f"Refusing to install: zip entry {info.filename!r} in "
+                                 f"{os.path.basename(zip_path)} points outside the install folder.")
+        zf.extractall(root)
+
+
+def _is_installed(version: str) -> bool:
+    host, offline = _installed_dirs(version)
+    return (os.path.isfile(os.path.join(host, "eplanmcp-version.txt"))
+            and os.path.isfile(os.path.join(offline, _OFFLINE_EXE)))
+
+
+def ensure_host(version: str = HOST_VERSION) -> dict:
+    """Install the release host v<version> under INSTALL_ROOT/<version>, unless it is there.
+
+    Downloads the assets and SHA256SUMS.txt, refuses on a missing or wrong checksum or an unsafe
+    zip entry, extracts into a temp folder next to the target and renames it into place, so a
+    failed or interrupted install leaves nothing behind. Raises OSError or ValueError."""
+    if not _VERSION_RE.fullmatch(version or ""):
+        raise ValueError(f"Bad host version {version!r}; expected e.g. {HOST_VERSION}.")
+    host, offline = _installed_dirs(version)
+    target = os.path.join(INSTALL_ROOT, version)
+    info = {"version": version, "path": target, "host_dir": host, "offline_dir": offline,
+            # for eplan_register_addon(install_file=...)
+            "install_file": os.path.join(os.path.dirname(host), "CFG", "install.xml")}
+    with _install_lock:
+        if _is_installed(version):
+            return dict(info, installed=False, note="Already installed.")
+        if os.path.exists(target):
+            raise FileExistsError(f"{target} exists but holds no complete host; delete it and retry.")
+        os.makedirs(INSTALL_ROOT, exist_ok=True)
+        tmp = tempfile.mkdtemp(prefix=".download-", dir=INSTALL_ROOT)   # same volume: atomic rename
+        try:
+            sums_path = os.path.join(tmp, _RELEASE_SUMS)
+            _download(_release_url(version, _RELEASE_SUMS), sums_path)
+            sums = {}
+            with open(sums_path, encoding="utf-8-sig") as f:
+                for line in f.read().splitlines():
+                    parts = line.split(None, 1)
+                    if len(parts) == 2:
+                        sums[parts[1].strip().lstrip("*")] = parts[0].lower()
+            stage = os.path.join(tmp, version)
+            for pattern, sub in _RELEASE_ASSETS:
+                name = pattern.format(v=version)
+                expected = sums.get(name)
+                if not expected:
+                    raise ValueError(f"Refusing to install: {_RELEASE_SUMS} has no checksum for {name}.")
+                zip_path = os.path.join(tmp, name)
+                actual = _download(_release_url(version, name), zip_path)
+                if actual != expected:
+                    raise ValueError(f"Refusing to install: SHA-256 of {name} is {actual}, "
+                                     f"{_RELEASE_SUMS} says {expected}.")
+                _safe_extract(zip_path, os.path.join(stage, sub))
+            os.rename(stage, target)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        if not _is_installed(version):
+            raise FileNotFoundError(f"The release v{version} installed to {target} but holds no "
+                                    "complete host (eplanmcp-version.txt, " + _OFFLINE_EXE + ").")
+    return dict(info, installed=True)
+
+
+def _auto_install(path: str) -> None:
+    """Install the release when `path` is a default installed-release folder (no override, no
+    local build). Any failure becomes a FileNotFoundError with the reason."""
+    if os.path.normcase(os.path.abspath(path)) not in {os.path.normcase(d) for d in _installed_dirs()}:
+        return
+    try:
+        ensure_host()
+    except (OSError, ValueError, zipfile.BadZipFile) as e:
+        raise FileNotFoundError(f"Script host not built here and the release v{HOST_VERSION} "
+                                f"could not be installed: {e}") from e
+
+
+def script_host_install(version: str = None) -> dict:
+    """
+    Download and install the script host release (add-in, bootstrap and offline host) from the
+    project's GitHub release v<version> into ~/.eplan-mcp/host/<version>/. Checks every file's
+    SHA-256 against the release's SHA256SUMS.txt and refuses on a mismatch. A no-op when that
+    version is already installed. Needed only for a git clone without a local dotnet build;
+    script tools also run it on first use. To use the add-in runtime, register the returned
+    install_file with eplan_register_addon and restart EPLAN.
+
+    Args:
+        version: Host version to install; default the version this server expects.
+    """
+    try:
+        return dict(ensure_host(version or HOST_VERSION), success=True)
+    except (OSError, ValueError, zipfile.BadZipFile) as e:
+        return {"success": False, "error": str(e)}
+
+
 def _bootstrap_script(run_folder: str, mode: str, request_path: str, result_path: str) -> str:
     """Fill the bootstrap template and write it into the run folder."""
     template = os.path.join(HOST_DIR, "Bootstrap", "bootstrap.cs.template")
     if not os.path.isfile(template):
+        _auto_install(HOST_DIR)
+    if not os.path.isfile(template):
         raise FileNotFoundError(
-            f"Script host not built: {template} is missing. Build dotnet/EplanMcp.sln "
-            "(Release) or set EPLAN_MCP_HOST_DIR.")
+            f"Script host not built: {template} is missing. Run eplan_script_host_install, build "
+            "dotnet/EplanMcp.sln (Release) or set EPLAN_MCP_HOST_DIR.")
     text = _read(template)
     # Verbatim C# strings (@"..."): only a double quote needs escaping.
     for key, value in (("HOST_DIR", HOST_DIR), ("REQUEST_PATH", request_path),
@@ -264,11 +417,11 @@ def _bootstrap_script(run_folder: str, mode: str, request_path: str, result_path
 
 # The offline host (dotnet/src/EplanMcp.Host.Offline): EPLAN's offline API in its own long-lived
 # process, fed through a queue folder. No interactive EPLAN connection is needed for it.
-OFFLINE_DIR = os.environ.get("EPLAN_MCP_OFFLINE_DIR") or os.path.join(DOTNET_DIR, "artifacts", "offline")
+OFFLINE_DIR = _default_dir("EPLAN_MCP_OFFLINE_DIR", os.path.join(DOTNET_DIR, "artifacts", "offline"),
+                           _installed_dirs()[1])
 OFFLINE_QUEUE = os.environ.get("EPLAN_MCP_OFFLINE_QUEUE") or os.path.join(
     os.path.expanduser("~"), ".eplan-mcp", "offline-queue")
 _OFFLINE_STATUS_FRESH_S = 15
-_OFFLINE_EXE = "EplanMcp.Host.Offline.exe"
 _OFFLINE_STOP_WAIT_S = 60.0
 _offline_lock = threading.Lock()
 _offline_last_pid = None    # last host pid seen: it outlives its status.json while it shuts down
@@ -369,7 +522,10 @@ def _offline_ensure(start_timeout: float = 180.0) -> dict:
                                "when it has exited." % _offline_last_pid)
         exe = os.path.join(OFFLINE_DIR, _OFFLINE_EXE)
         if not os.path.isfile(exe):
-            raise FileNotFoundError(f"Offline host not built: {exe}. Build dotnet/src/EplanMcp.Host.Offline (Release).")
+            _auto_install(OFFLINE_DIR)
+        if not os.path.isfile(exe):
+            raise FileNotFoundError(f"Offline host not built: {exe}. Run eplan_script_host_install or "
+                                    "build dotnet/src/EplanMcp.Host.Offline (Release).")
         os.makedirs(OFFLINE_QUEUE, exist_ok=True)
         for leftover in (stop, os.path.join(OFFLINE_QUEUE, "status.json")):
             try:
@@ -484,8 +640,8 @@ def _version_warning(data: dict) -> dict:
     reported = data.get("core_version")
     if reported and reported != HOST_VERSION:
         data["warning"] = (f"Host version {reported} differs from the version this server expects "
-                           f"({HOST_VERSION}). Update the host (rebuild dotnet/ or install the "
-                           "matching release) and restart EPLAN for the add-in.")
+                           f"({HOST_VERSION}). Update the host: rebuild dotnet/ or run "
+                           "eplan_script_host_install, and restart EPLAN for the add-in.")
     return data
 
 
