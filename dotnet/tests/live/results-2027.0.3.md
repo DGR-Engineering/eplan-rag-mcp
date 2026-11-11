@@ -76,3 +76,100 @@ host, and an `identity.cs` re-run on both runtimes with the same result.
   `EplanBlockedByDialog` and "the host wrote no result". The test closed no dialog. Shortly after,
   the dialogs were gone, and a retry passed. The cause was not identified. EPLAN's system messages
   show only read-only symbol-library opens, each closed again.
+
+## 0.2.0 library tools
+
+Measured 2026-11-11 on the same PC and EPLAN 2027.0.3, host core 0.2.0 built in Release (first
+`4f78a11`, then rebuilt with the fixes below). The target was a scratch clone of a mid-size
+schematic project (75 pages), carrying the scratch marker, opened alone. Every tool was called the
+way the MCP server builds it (`script_tools.make_tool`), so a writer's default call is a dry run.
+Each dry run and each guard was proved by a before/after read (`text_placements`, `line_styles`,
+or a function-location read), not only by the tool's own report.
+
+| Tool | Result | Dry run | Real write, read-back | Guards refused (`success: false`, nothing written) |
+|---|---|---|---|---|
+| `text_placements` | Pass | - | - | - |
+| `text_set_height` | Pass | No change | height 3.0, factor 1.5, `target=font_size` 3.5 and 2.54: `sticks`, `not_stuck` empty | neither or both of height/factor; factor 0; bad target; unknown handle; malformed `#` handle; symbol handle without `#`; wrong property id; position out of range; handle from another page; stale handle of a deleted text; variant text without `allow_shared` |
+| `text_set_box` | Pass | No change | 8 settings on a free text, 2 on a local property text, all `sticks` | nothing to set; `box_width` 0; stale handle; variant text without `allow_shared` |
+| `text_create` | Pass | No new text | two-line text: text, x, y, height read back; the line break kept (`debug` codes) | height 0; unknown page (thrown, so `phase: run`) |
+| `line_styles` | Pass | - | - | - |
+| `line_styles_set` | Pass | No change | 2 lines and 1 arc: style, factor, width all `sticks` | over limit; nothing matches; missing limit; missing or inverted area; nothing to set; factor 0; width below 0 |
+| `function_move` | **Fixed**, then pass | No change | 2 functions, by name and by handle: `sticks`; moved back | ambiguous name; unknown handle; no x/y; same function twice; one bad move with one good; empty `moves` (thrown) |
+| `function_remove` | Pass | No change | 2 marker functions: `removed`, count 120 to 118 | one bad name (all-or-nothing); wrong prefix; ambiguous name; empty prefix; empty names; missing prefix (thrown); main function; every function on a 120-function page (dry and real) |
+| `macrobox_snapshot` | Pass | - | 621 boxes on 75 pages, about 1.6 s | - |
+| `macrobox_restore` | **Fixed**, then pass | `would_create` 2 | after deleting 2 boxes: `created` 2, `ok` true; a new snapshot equals the original field by field; a re-run creates nothing | missing limit; over limit (limit 1 for 2); bare-array file; other project; missing file. With `allow_other_project` the other-project file is accepted. |
+| `parts_snapshot` | Pass | - | 8,687 functions, 1,022 with parts, about 4.2 s | - |
+| `parts_restore` | Pass | `would_change` 2 | after clearing the parts of 2 main functions: `changed` 2, read back; a new snapshot equals the original except the 2 functions `function_remove` deleted | same as `macrobox_restore` |
+
+Both restores ran project-wide well inside the 120 s budget: `macrobox_restore` 0.4-2.5 s,
+`parts_restore` 4.6-6.6 s. The limit check runs a full dry pass first, so a refused call costs
+about the same time as a real one.
+
+### Bootstrap runtime
+
+`text_placements`, `line_styles` and `text_set_height` (dry run, real write with `sticks`, and the
+stale-handle guard) passed on the bootstrap runtime after the rebuild. `script_hello` reports core
+0.2.0, protocol 1, on both runtimes.
+
+### Python tools (reworded only)
+
+`scratch_symbols_status` reads the current symbol path and reports no redirect.
+`list_addin_actions` without a manifest refuses clearly ("prefix is required", then "source_dirs is
+required"). A `ui_dismiss_watch_start` / `ui_dismiss_watch_stop` pair started, stopped and reported
+0 dismissals. Nothing was built, deployed or isolated.
+
+### Answers to the open questions
+
+- **Handles.** `ToStringIdentifier()` gives `28/30/<n>/0` for a free text and `28/17/<n>/0` for a
+  function (symbol reference). A free-text handle has no `#`. A property-text handle is
+  `<owner>#<position>:<property id>`, for example `28/17/<n>/0#1:20201`. Handles were identical
+  across two separate runs, and still resolved after an EPLAN restart and a reopen of the project.
+- **Variant (non-local) property texts.** Without `allow_shared`, both writers refuse. With it,
+  `text_set_box` wrote `has_box` to the variant, and a later run showed it on every instance of
+  that variant (20 per page on the three pages checked) and on none of another variant of the same
+  symbol. `text_set_height` with `allow_shared` threw "The database is write-protected" at the
+  `TextBase.Height` setter: nothing was written, and the result is `success: false`, `phase: run`,
+  with a stack trace instead of a clean refusal. Not changed; see below.
+- **Font size (#19017) read-back** is an invariant-culture number string: `"2.54"`, `"3"`, `"3.5"`,
+  `"4.5"`. It is `null` on property texts whose height comes from the layer. The `font_size` sticks
+  check parses it correctly. Writing the font size also changes `Height` to the same value.
+- **`Pen.Width` sticks** (0.5 mm on 2 lines and an arc, read back in a later run and after a
+  restart), as do the style id and the style factor. The pattern length then reads -2.
+- **Restore budget:** see above; both are far below 120 s on this project.
+
+### Fixed during this test
+
+- **`function_move` wrote the good moves when another move failed** and reported `success: true`
+  with `errors > 0`. For "same function twice", the first entry was written. Every move is now
+  checked before any is written, and one failed check refuses the call. Commit `093bbb0`.
+  Re-tested live: each guard leaves every position unchanged.
+- **`macrobox_restore` failed to set the layer on every created box** ("S511249 Invalid layer
+  cannot be transferred"): `new GraphicalLayer(name, ...)` is refused. Every restore was reported
+  `partly_applied` with `ok: false`, although the boxes were created. The helper now takes the
+  layer object from the project's `LayerTable` by name and reads it back. Commit `2a600db`
+  (`EplanMcp.Eplan`, so EPLAN was restarted on the rebuilt host). Re-tested live: `created` 2,
+  `ok` true. A probe also moved a box to another layer and back through the same lookup.
+
+### Seen, not changed
+
+- `text_set_height` with `allow_shared` on a variant text throws (see above). `text_set_box`
+  reaches the variant; `text_set_height` does not. A clean refusal, or a switch to local
+  placements, is a design decision.
+- The bounds of a property text are 0,0,0,0 when it shows an empty value. Texts with a value have
+  page-coordinate bounds. `x` and `y` of a property text are relative to the symbol.
+- `text_create` accepts an empty `text` and places an empty text.
+- `line_styles` with only some of x0..y1 given ignores the area and lists the whole page.
+- Arguments that `ctx.Args.Require` or `PlainJson` reject (missing `symbol_prefix`, empty `moves`,
+  bare-array or other-project snapshot, unknown page) come back as an exception (`phase: run`,
+  with a stack trace) instead of a result `error`. They are still `success: false`, and nothing is
+  written.
+- When a restore has nothing to do, a real call reports `dry_run: true`, because it returns its
+  planning pass.
+- A read-only snapshot refuses an `out` path outside its run folder. Use the default and copy the
+  file.
+- `unloaded` was `false` on the first run in each new server connection, and on the first run of
+  some scripts after it. Later runs reported `true`, as in 0.2.0.
+
+No dialog that the test did not open appeared, and the "Project master data" watcher dismissed
+nothing. The clone was discarded and its marker removed. EPLAN was left running with no project
+open.
