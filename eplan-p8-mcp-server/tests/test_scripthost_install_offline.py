@@ -121,3 +121,15 @@ def test_auto_install_runs_only_for_the_default_install_folder(tmp_path, monkeyp
     assert calls == []
     scripthost._auto_install(scripthost._installed_dirs()[1])
     assert len(calls) == 1
+
+
+def test_dropped_download_is_reported_not_raised(tmp_path, monkeypatch):
+    import http.client
+    monkeypatch.setattr(scripthost, "INSTALL_ROOT", str(tmp_path / "installed"))
+
+    def broken(url, timeout=None):
+        raise http.client.IncompleteRead(b"partial")
+
+    monkeypatch.setattr(scripthost.urllib.request, "urlopen", broken)
+    out = scripthost.script_host_install()
+    assert out["success"] is False and not _leftovers(tmp_path / "installed")

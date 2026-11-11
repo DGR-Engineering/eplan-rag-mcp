@@ -30,6 +30,7 @@ calls ctx.Budget.Check(): EPLAN cannot abort a running script.
 """
 
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -370,7 +371,7 @@ def _auto_install(path: str) -> None:
         return
     try:
         ensure_host()
-    except (OSError, ValueError, zipfile.BadZipFile) as e:
+    except (OSError, ValueError, zipfile.BadZipFile, http.client.HTTPException) as e:
         raise FileNotFoundError(f"Script host not built here and the release v{HOST_VERSION} "
                                 f"could not be installed: {e}") from e
 
@@ -389,7 +390,7 @@ def script_host_install(version: str = None) -> dict:
     """
     try:
         return dict(ensure_host(version or HOST_VERSION), success=True)
-    except (OSError, ValueError, zipfile.BadZipFile) as e:
+    except (OSError, ValueError, zipfile.BadZipFile, http.client.HTTPException) as e:
         return {"success": False, "error": str(e)}
 
 
