@@ -5,7 +5,7 @@ WHY. EPLAN resolves a project's symbol libraries by NAME against $(MD_SYMBOLS):
 
     Project.SymbolLibraries -> ["My Library", ...] -> "<$(MD_SYMBOLS)>\My Library.slk"
 
-so cloning the project does not isolate its libraries. Two dead ends (measured live):
+so cloning the project does not isolate its libraries. Two dead ends:
 `Project.SymbolLibraries` is get-only, and the project setting
 `PROJECT.TrDMProject.EmbeddedMasterDataLibraries.SymbolLibs` takes a bare name only (an absolute
 path makes the project report "incomplete").
