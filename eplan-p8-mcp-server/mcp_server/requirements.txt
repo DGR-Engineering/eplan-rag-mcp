@@ -1,7 +1,8 @@
 # EPLAN MCP Server Dependencies
 
-# MCP SDK (>=1.8.0 for the streamable-http transport used by MCP_TRANSPORT=http)
-mcp>=1.8.0,<2
+# MCP SDK. Floor = the version the tool annotations, resources and tests were verified on
+# (tool(annotations=...) and resource templates); <2 until the 2.x API is checked.
+mcp>=1.30.0,<2
 
 # .NET interop for EPLAN API
 pythonnet>=3.0.0

@@ -119,7 +119,10 @@ namespace EplanMcp.Scripting.Core
                     res.Diagnostics.AddRange(compiled.Diagnostics);
                     if (!compiled.Success)
                         return Fail(res, "compile", "The script did not compile. See diagnostics.");
-                    var safety = SafetyAnalyzer.Check(compiled.Compilation!, readOnly, manifest.Unsafe);
+                    // Only the script itself: helper libraries are reviewed code (a probe library,
+                    // say) and legitimately use APIs a script may not.
+                    var safety = SafetyAnalyzer.Check(compiled.Compilation!, readOnly, manifest.Unsafe,
+                        compiled.Compilation!.SyntaxTrees.Take(1));
                     if (safety.Count > 0)
                     {
                         res.Diagnostics.InsertRange(0, safety);

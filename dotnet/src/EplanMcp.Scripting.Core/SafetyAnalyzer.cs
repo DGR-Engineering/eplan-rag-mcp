@@ -48,10 +48,13 @@ namespace EplanMcp.Scripting.Core
         /// <param name="readOnly">True when the run may not write: no assignments to EPLAN
         /// properties and no EPLAN method whose name starts with a write verb. False (a writing
         /// run): the script may not reach any project but ctx.Project.</param>
-        public static List<Diag> Check(CSharpCompilation compilation, bool readOnly, bool allowUnsafe)
+        /// <param name="scriptTrees">The trees to check: the script's own code. Helper libraries
+        /// passed with a script are reviewed library code and are not checked. Null checks all.</param>
+        public static List<Diag> Check(CSharpCompilation compilation, bool readOnly, bool allowUnsafe,
+            IEnumerable<SyntaxTree>? scriptTrees = null)
         {
             var found = new List<Diag>();
-            foreach (var tree in compilation.SyntaxTrees)
+            foreach (var tree in scriptTrees ?? compilation.SyntaxTrees)
             {
                 var model = compilation.GetSemanticModel(tree);
                 var root = tree.GetRoot();

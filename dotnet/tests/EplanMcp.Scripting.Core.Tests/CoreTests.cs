@@ -200,6 +200,19 @@ namespace EplanMcp.Scripting.Core.Tests
         }
 
         [Fact]
+        public void Helper_libraries_are_not_safety_checked_but_the_script_is()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "eplanmcp-helper-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            var helper = Path.Combine(dir, "Lib.cs");
+            File.WriteAllText(helper, "public static class Lib { public static int Spin() { while (true) { } } }");
+            var ok = RunPipeline.Execute(Req("return 1;", r => r.HelperSources.Add(helper)), new TestEnvironment(), Audit);
+            Assert.True(ok.Ok, ok.Error);
+            var bad = RunPipeline.Execute(Req("while (true) { }", r => r.HelperSources.Add(helper)), new TestEnvironment(), Audit);
+            Assert.Contains(bad.Diagnostics, d => d.Id == "EMCP003");
+        }
+
+        [Fact]
         public void Verify_failure_fails_the_run()
         {
             var res = RunPipeline.Execute(Req("return 1;"), new TestEnvironment { VerifyError = "project set changed" }, Audit);

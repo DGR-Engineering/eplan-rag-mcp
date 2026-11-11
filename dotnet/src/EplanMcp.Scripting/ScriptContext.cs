@@ -123,6 +123,17 @@ namespace EplanMcp.Scripting
             return s.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).ToList();
         }
 
+        /// <summary>The raw JSON text of one argument (an object or array stays JSON), or null.</summary>
+        public string? Json(string name)
+        {
+            if (!_raw.TryGetValue(name, out var v) || v == null) return null;
+            return v is JsonElement e ? e.GetRawText() : JsonSerializer.Serialize(v);
+        }
+
+        /// <summary>All arguments as one JSON object.</summary>
+        public string ToJson() =>
+            "{" + string.Join(",", _raw.Select(kv => JsonSerializer.Serialize(kv.Key) + ":" + (Json(kv.Key) ?? "null"))) + "}";
+
         public string Require(string name) =>
             String(name) ?? throw new ArgumentException($"Missing required argument '{name}'.");
     }
