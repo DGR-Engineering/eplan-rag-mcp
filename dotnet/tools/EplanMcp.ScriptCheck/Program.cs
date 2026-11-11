@@ -31,7 +31,7 @@ if (!Directory.Exists(bin)) { Console.Error.WriteLine("EPLAN Bin folder not foun
 if (scripts.Count == 0) { Console.Error.WriteLine("No scripts given."); return 2; }
 
 var referenceSet = ReferenceSet.FromPaths(Directory.GetFiles(bin, "Eplan.EplApi.*Netu.dll")
-    .Concat(new[] { typeof(ScriptArgs).Assembly.Location, typeof(RunPipeline).Assembly.Location })
+    .Concat(new[] { typeof(ScriptArgs).Assembly.Location, typeof(RunPipeline).Assembly.Location, typeof(EplanMcp.Eplan.Pages).Assembly.Location })
     .Concat(refs));
 var helperSources = helpers.Select(h => (path: h, text: File.ReadAllText(h))).ToList();
 

@@ -27,6 +27,9 @@ namespace EplanMcp.Scripting.Tests
             typeof(ScriptCompileTests).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
                 .First(a => a.Key == "EplanBinPath").Value!;
 
+        /// <summary>EplanMcp.Eplan: the host loads it and snippets get its namespace, so every check compiles with it.</summary>
+        private static string EplanHelpers => typeof(EplanMcp.Eplan.Pages).Assembly.Location;
+
         public static IEnumerable<object[]> Scripts()
         {
             var root = DotnetRoot();
@@ -51,7 +54,7 @@ namespace EplanMcp.Scripting.Tests
             var composed = SourceComposer.Compose(source, Path.GetFileName(path), snippets);
             var refs = ReferenceSet.FromPaths(
                 Directory.GetFiles(bin, "Eplan.EplApi.*Netu.dll")
-                    .Concat(new[] { typeof(ScriptArgs).Assembly.Location, typeof(RunPipeline).Assembly.Location }));
+                    .Concat(new[] { typeof(ScriptArgs).Assembly.Location, typeof(RunPipeline).Assembly.Location, EplanHelpers }));
             var compiled = ScriptCompiler.Compile(composed, Path.GetFileName(path),
                 Array.Empty<(string, string)>(), refs, "check_" + Path.GetFileNameWithoutExtension(path));
             var errors = compiled.Diagnostics.Where(d => d.Severity == "error").ToList();
@@ -68,7 +71,7 @@ namespace EplanMcp.Scripting.Tests
             const string src = "var p = ctx.RequireProject();\nforeach (var f in new DMObjectsFinder(p).GetFunctions(null)) { f.SmartLock(); }\nreturn 1;";
             var snippets = EplanEnvironment.DefaultSnippets;
             var refs = ReferenceSet.FromPaths(Directory.GetFiles(bin, "Eplan.EplApi.*Netu.dll")
-                .Concat(new[] { typeof(ScriptArgs).Assembly.Location }));
+                .Concat(new[] { typeof(ScriptArgs).Assembly.Location, EplanHelpers }));
             var compiled = ScriptCompiler.Compile(SourceComposer.Compose(src, "w.cs", snippets), "w.cs",
                 Array.Empty<(string, string)>(), refs, "check_write");
             Assert.True(compiled.Success);
@@ -82,7 +85,7 @@ namespace EplanMcp.Scripting.Tests
             var bin = EplanBin();
             const string src = "// @writes true\nvar all = new ProjectManager().OpenProjects;\nreturn all.Length;";
             var refs = ReferenceSet.FromPaths(Directory.GetFiles(bin, "Eplan.EplApi.*Netu.dll")
-                .Concat(new[] { typeof(ScriptArgs).Assembly.Location }));
+                .Concat(new[] { typeof(ScriptArgs).Assembly.Location, EplanHelpers }));
             var compiled = ScriptCompiler.Compile(SourceComposer.Compose(src, "p.cs", EplanEnvironment.DefaultSnippets), "p.cs",
                 Array.Empty<(string, string)>(), refs, "check_other_projects");
             Assert.True(compiled.Success);

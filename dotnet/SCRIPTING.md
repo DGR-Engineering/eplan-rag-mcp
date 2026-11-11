@@ -40,6 +40,34 @@ public static class Script
 The run already holds a `LockingStep`. Return plain data: numbers, strings, lists, dictionaries,
 anonymous objects. EPLAN objects come back as their type and text only.
 
+## Helpers: `EplanMcp.Eplan`
+
+The host also loads `EplanMcp.Eplan`, a library of generic helpers. Snippets get its namespace
+automatically; a full class adds `using EplanMcp.Eplan;`. The scripts in `dotnet/scripts/` use it.
+
+| Class | Use |
+|---|---|
+| `Pages` | `All`, `Find` / `Require` by name (exact, optionally partial), `Matches`, `Placements(page)`, `InScope` |
+| `Functions` | `All` (placed or not), `OnPage`, `Find(page, deviceTag, symbolPrefix, occurrence)`, `Named`, `DeviceTag`, `FullDeviceTag`, `SymbolName` |
+| `PropertyReader` | Guarded reads by id, index or name (`Read`, `ReadById`, `ReadByName`, `Existing`, `EveryLanguage`, `Supplementary`), `ResolveId`, `Escape` |
+| `Describe` | Plain dictionaries for a `Placement`, `Text`, `Function`, `FunctionFull`, `Storable`, `Page`; `Handle` (the id `Edit.SelectObjects` takes) |
+| `Parts` | `Row`, `Read`, `Snapshot`, `Restore` of article references |
+| `MacroBoxes` | `Describe`, `Survey`, `Restore`, `Links`, `PrepareInspect` |
+| `TextFit` | `Snapshot`, `ResolvePlacement`, `SetHeight`, `SetBox` for text size and alignment boxes |
+| `Selection`, `Layers`, `SymbolLibraries` | Read the selection, the layer table, a symbol library |
+| `PlainJson` | JSON files and record arguments as plain data (`Parse`, `Rows`, `RowsFromArgs`, `Write`, `OutPath`) |
+| `Safe` | Guarded reads (`Text`, `Get`, `Maybe`, `Field`), `Error`, `RequireWrite` |
+
+Property reads are where EPLAN surprises most: reading a property the object does not carry
+throws, an empty value throws from `ToInt()`, and `PropertyValue`'s implicit conversions do not
+apply through reflection or `Convert`. `PropertyReader` handles all three.
+
+Helpers that write take `ctx` and lock through `ctx.Lock` (or call `Safe.RequireWrite`), so they
+refuse a read-only run or a dry run at run time: the compile-time check cannot see inside a
+library. Keep raw EPLAN calls out of a read-only script where a helper exists. An object
+initializer such as `new PlacementsFilter { Page = page }` assigns an EPLAN property and fails
+the read-only check; `Pages.Placements(page)` does not.
+
 ## Headers
 
 Comment lines at the very top declare what a script is:

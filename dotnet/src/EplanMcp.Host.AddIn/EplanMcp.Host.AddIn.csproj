@@ -13,6 +13,7 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.WindowsDesktop.App" />
     <ProjectReference Include="..\EplanMcp.Scripting\EplanMcp.Scripting.csproj" />
+    <ProjectReference Include="..\EplanMcp.Eplan\EplanMcp.Eplan.csproj" />
     <!-- Use the Roslyn EPLAN ships; never put a second copy beside the add-in. -->
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.CodeAnalysis.Common" ExcludeAssets="runtime" />
@@ -28,6 +29,7 @@
       <_HostFile Include="$(OutDir)EplanMcp.Contracts.dll" />
       <_HostFile Include="$(OutDir)EplanMcp.Scripting.Core.dll" />
       <_HostFile Include="$(OutDir)EplanMcp.Scripting.dll" />
+      <_HostFile Include="$(OutDir)EplanMcp.Eplan.dll" />
     </ItemGroup>
     <GetFileHash Files="@(_HostFile)" Algorithm="SHA256" HashEncoding="hex">
       <Output TaskParameter="Items" ItemName="_HostHash" />

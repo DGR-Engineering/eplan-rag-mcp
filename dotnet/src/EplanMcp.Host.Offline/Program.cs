@@ -42,8 +42,12 @@ namespace EplanMcp.Host.Offline
 
         // Separate, non-inlined method: its JIT is what first loads the EPLAN-bound assemblies.
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static int Serve(string bin, string queue, TimeSpan idle) =>
-            EplanMcp.Scripting.OfflineHost.Serve(bin, queue, idle);
+        private static int Serve(string bin, string queue, TimeSpan idle)
+        {
+            // Scripts compile against the assemblies already loaded; load the helper library first.
+            _ = typeof(EplanMcp.Eplan.Pages).Assembly;
+            return EplanMcp.Scripting.OfflineHost.Serve(bin, queue, idle);
+        }
 
         private static string? Arg(string[] args, string name)
         {

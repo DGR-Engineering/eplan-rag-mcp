@@ -38,6 +38,8 @@ namespace EplanMcp.Host.AddIn
             var request = Param(ctx, "request");
             var result = Param(ctx, "result");
             if (string.IsNullOrEmpty(request) || string.IsNullOrEmpty(result)) return false;
+            // Scripts compile against the assemblies already loaded; load the helper library first.
+            _ = typeof(EplanMcp.Eplan.Pages).Assembly;
             HostEntry.Run(request!, result!, "addin");
             return true;
         }

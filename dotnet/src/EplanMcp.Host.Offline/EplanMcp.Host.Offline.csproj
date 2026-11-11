@@ -15,6 +15,7 @@
   <ItemGroup>
     <FrameworkReference Include="Microsoft.WindowsDesktop.App" />
     <ProjectReference Include="..\EplanMcp.Scripting\EplanMcp.Scripting.csproj" />
+    <ProjectReference Include="..\EplanMcp.Eplan\EplanMcp.Eplan.csproj" />
     <Reference Include="Eplan.EplApi.StarterNetu" HintPath="$(EplanBinPath)\Eplan.EplApi.StarterNetu.dll" Private="false" />
   </ItemGroup>
   <ItemGroup>

@@ -34,7 +34,7 @@ namespace EplanMcp.Scripting
             Usings = new[]
             {
                 "System", "System.Linq", "System.Collections.Generic", "System.IO",
-                "Eplan.EplApi.Base", "Eplan.EplApi.DataModel", "Eplan.EplApi.HEServices", "EplanMcp.Scripting",
+                "Eplan.EplApi.Base", "Eplan.EplApi.DataModel", "Eplan.EplApi.HEServices", "EplanMcp.Scripting", "EplanMcp.Eplan",
             },
         };
 
