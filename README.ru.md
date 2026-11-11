@@ -18,12 +18,12 @@ Model Context Protocol (MCP).
 
 ```
 .
-└── eplan-p8-mcp-server/          # ЛОКАЛЬНО: MCP-сервер, управляющий EPLAN P8
+└── python/                       # ЛОКАЛЬНО: MCP-сервер, управляющий EPLAN P8
 ```
 
 | Компонент | Тип | Назначение | Продукт EPLAN |
 |---|---|---|---|
-| `eplan-p8-mcp-server/` | Локальный MCP на Python | Управление запущенным экземпляром EPLAN из Claude: открытие и закрытие проектов, экспорт, отчёты, скрипты | EPLAN Electric P8 |
+| `python/` | Локальный MCP на Python | Управление запущенным экземпляром EPLAN из Claude: открытие и закрытие проектов, экспорт, отчёты, скрипты | EPLAN Electric P8 |
 | [**eplan-cloudflare-rags**](https://github.com/covagashi/eplan-cloudflare-rags) | Удалённые Cloudflare Workers, отдельный репозиторий | Документация P8 2026, P8 2027 и EEC Pro через MCP и REST | EPLAN Electric P8 и EEC Pro |
 | [**eplan-development-skill**](https://github.com/covagashi/eplan-development-skill) | Навык Claude Code, отдельный репозиторий | Учит Claude писать корректные скрипты EPLAN, код API и приложения Remote Client | EPLAN Electric P8 |
 
@@ -40,12 +40,12 @@ Model Context Protocol (MCP).
 ### Локальная автоматизация EPLAN (P8)
 
 ```bash
-python YOURPATH/eplan-p8-mcp-server/install.py   # own .venv + registers "eplan"
+python YOURPATH/python/install.py   # own .venv + registers "eplan"
 claude mcp list   # в списке должен появиться "eplan"
 ```
 
 Затем запустите EPLAN, откройте Claude Code и напишите `connect to eplan`. Полное руководство —
-в [`eplan-p8-mcp-server/mcp_server/README.md`](eplan-p8-mcp-server/mcp_server/README.md).
+в [`python/mcp_server/README.md`](python/mcp_server/README.md).
 
 ![Claude CLI configured](image.png)
 
@@ -102,7 +102,7 @@ MCP-клиентов, которые присылают полную схему 
 инструментов обходится ему примерно так же дёшево, как 13 в режиме discovery, а
 дополнительный слой «поиск → описание → вызов» лишь добавляет один лишний обмен. Компромисс и
 измерения описаны в
-[`eplan-p8-mcp-server/mcp_server/README.md`](eplan-p8-mcp-server/mcp_server/README.md#discovery-mode-eplan_mcp_mode).
+[`python/mcp_server/README.md`](python/mcp_server/README.md#discovery-mode-eplan_mcp_mode).
 
 ### Удалённые RAG по документации (P8, EEC Pro, 2027)
 
@@ -177,7 +177,7 @@ MCP-серверы позволяют Claude *действовать* в EPLAN. 
 
 ### 1. Реализуйте действие
 
-В файле `eplan-p8-mcp-server/mcp_server/api/actions/<your_module>.py`:
+В файле `python/mcp_server/api/actions/<your_module>.py`:
 
 ```python
 def open_project(project_path: str, open_mode: str = None) -> dict:
@@ -197,7 +197,7 @@ def open_project(project_path: str, open_mode: str = None) -> dict:
 ### 2. Экспортируйте её
 
 Добавьте функцию в импорты **и** в `__all__` в файле
-`eplan-p8-mcp-server/mcp_server/api/actions/__init__.py`. После этого она автоматически
+`python/mcp_server/api/actions/__init__.py`. После этого она автоматически
 зарегистрируется как `eplan_open_project`.
 
 ### 3. Перезапустите MCP-сервер
@@ -206,11 +206,11 @@ def open_project(project_path: str, open_mode: str = None) -> dict:
 
 ### 4. Сверьтесь с официальной документацией (необязательно)
 
-`eplan-p8-mcp-server/tools/validate_actions.py` сверяет каждое имя действия и каждый параметр,
+`python/tools/validate_actions.py` сверяет каждое имя действия и каждый параметр,
 объявленные в обёртках, с официальным RAG по документации EPLAN и записывает отчёт в markdown:
 
 ```bash
-python eplan-p8-mcp-server/tools/validate_actions.py
+python python/tools/validate_actions.py
 ```
 
 ![EPLAN test](image-1.png)

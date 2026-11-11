@@ -1,6 +1,6 @@
 """Offline tests for the AAS package (mapping, builder, inspect, dry-run import).
 
-Run from eplan-p8-mcp-server/:  python -m pytest tests/ -v
+Run from python/:  python -m pytest tests/ -v
 No EPLAN needed - everything here is the pure-Python side of the AAS tools.
 """
 

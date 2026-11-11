@@ -370,7 +370,7 @@ All of these exist as `eplan_*` tools:
 - **EPLAN settings at runtime:** via `eplan_set_setting` /
   `eplan_set_project_setting` (action params `set`/`value`/`index`) or the
   typed `eplan_settings_set_*` scripted tools.
-- **The MCP registration itself:** `python eplan-p8-mcp-server/install.py` (own `.venv`, registers `eplan`).
+- **The MCP registration itself:** `python python/install.py` (own `.venv`, registers `eplan`).
 
 ---
 

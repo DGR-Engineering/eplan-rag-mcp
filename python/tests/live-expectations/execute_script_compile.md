@@ -44,7 +44,7 @@ file has no such contract, so the fix reads the message tree directly.
 With EPLAN running and the remote channel up:
 
 ```bash
-cd eplan-p8-mcp-server
+cd python
 python -m pytest tests/test_execute_script_live.py -v -rs
 ```
 

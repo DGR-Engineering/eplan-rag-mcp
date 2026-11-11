@@ -23,7 +23,7 @@ LLM_MD = os.path.join(
     "llm.md",
 )
 
-# llm.md lives at the REPO root, one level above eplan-p8-mcp-server/.
+# llm.md lives at the REPO root, one level above python/.
 pytestmark = pytest.mark.skipif(
     not os.path.exists(LLM_MD),
     reason="llm.md not found - running outside a full repo checkout",

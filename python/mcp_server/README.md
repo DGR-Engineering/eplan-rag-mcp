@@ -55,7 +55,7 @@ The script-management utilities themselves (`RegisterScript`, `ExecuteScript`,
 ## Directory Structure
 
 ```
-eplan-p8-mcp-server/
+python/
 ├── mcp_server/
 │   ├── api/
 │   │   └── actions/              # QuietMode python action wrappers
@@ -93,11 +93,11 @@ eplan-p8-mcp-server/
 ## Installation for Claude Code
 
 ```bash
-python YOUR_PATH\eplan-p8-mcp-server\install.py
+python YOUR_PATH\python\install.py
 claude mcp list   # "eplan" should appear
 ```
 
-`install.py` creates `eplan-p8-mcp-server\.venv`, installs `requirements.txt` into
+`install.py` creates `python\.venv`, installs `requirements.txt` into
 it and registers `eplan` (user scope) with that venv's `python.exe`, so the server
 never depends on whichever `python` is first on `PATH`. Re-run it to upgrade.
 Extra arguments are passed to `claude mcp add`, e.g.
@@ -129,7 +129,7 @@ connect over HTTP:
 $env:MCP_TRANSPORT = "http"     # default transport is stdio
 $env:MCP_HOST      = "127.0.0.1" # bind address (default)
 $env:MCP_PORT      = "8321"      # default
-python YOUR_PATH\eplan-p8-mcp-server\mcp_server\server.py
+python YOUR_PATH\python\mcp_server\server.py
 ```
 
 **On your machine**, tunnel the port (the server has no authentication — do
@@ -282,7 +282,7 @@ extension pack is free in discovery mode.
   "mcpServers": {
     "eplan": {
       "command": "python",
-      "args": ["YOUR_PATH\\eplan-p8-mcp-server\\mcp_server\\server.py"],
+      "args": ["YOUR_PATH\\python\\mcp_server\\server.py"],
       "env": { "EPLAN_MCP_MODE": "discovery" }
     }
   }
@@ -290,7 +290,7 @@ extension pack is free in discovery mode.
 ```
 
 ```bash
-python YOUR_PATH\eplan-p8-mcp-server\install.py -e EPLAN_MCP_MODE=discovery
+python YOUR_PATH\python\install.py -e EPLAN_MCP_MODE=discovery
 ```
 
 An unrecognised value warns on stderr and falls back to `full`; it never stops
