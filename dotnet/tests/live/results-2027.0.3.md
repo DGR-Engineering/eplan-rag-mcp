@@ -183,3 +183,116 @@ required"). A `ui_dismiss_watch_start` / `ui_dismiss_watch_stop` pair started, s
 No dialog that the test did not open appeared, and the "Project master data" watcher dismissed
 nothing. The clone was discarded and its marker removed. EPLAN was left running with no project
 open.
+
+### 0.2.0 fixes
+
+Measured 2026-11-11 on the same PC and EPLAN 2027.0.3. The host was rebuilt in Release twice:
+first at `71b4473`, then at `80cfc6c` after the follow-up below. EPLAN was restarted on each
+build. The target was a fresh scratch clone of the same mid-size schematic project (75 pages,
+8,687 functions, 1,022 of them with parts). The clone carried the scratch marker and was opened
+alone. Each call was made the way the MCP server builds it.
+
+**Clean refusals.** A new `ScriptRefusedException` in the core is turned by the run pipeline into
+the result `{"error": ...}`. The run ends `ok`, `phase: done`, and the server reports
+`success: false` with the plain message and no stack trace. These throw it:
+
+- `ctx.Args.Require` and `ctx.RequireProject`;
+- `Pages.Require`;
+- `PlainJson`'s record and snapshot readers;
+- the `out` path check.
+
+Two scripts that threw an `ArgumentException` now return the error. All 11 guards that threw
+before were re-tested live, and each came back clean:
+
+- a missing required argument, and a missing `symbol_prefix`;
+- empty `moves`;
+- a bare-array snapshot, an other-project snapshot, a snapshot of the wrong kind, and a missing
+  snapshot file;
+- an unknown page, in `text_create` and in `line_styles`;
+- `macrobox_links` without pages;
+- a read-only `out` outside the run folder. The message now says to pass a bare file name and
+  copy the file from the `out` path.
+
+On the bootstrap runtime, an unknown page and a missing argument were clean too. Both restores
+now resolve `out` before the first write, so a refusal always means nothing was written.
+
+**`text_set_height` on a variant property text.** The EPLAN API documents no way to set the
+height of a variant's property placement. `SwitchLocalPropertyPlacements` makes one instance
+local, which is a different change. With `allow_shared`, the font size target also failed live,
+with "The database is write-protected", and nothing was written. Both targets are now refused up
+front, in a dry run as well, with a pointer to `text_set_box` or to local placements.
+`allow_shared` stays for compatibility. Live after the rebuild, all four calls were clean
+refusals (height and font size, each dry and real), and 0 of 1,180 texts on the page changed.
+
+**`parts_restore` coverage.** `parts_snapshot` writes schema 2. Each row adds:
+
+- `id` (`ToStringIdentifier()`);
+- `full_dt` (with structures);
+- `definition` (function definition identifier);
+- `variant`.
+
+`parts_restore` matches by id first when the snapshot comes from the same project and the
+function at that id has the same category and device tag. The rest match by
+(page, full device tag, definition, category, symbol, variant, connection points). Schema 1 files
+still match by the older key and the loose key.
+
+A tie is refused and listed in the out file, with up to 20 candidates (id, page, full device tag,
+definition, main flag, current parts). Parts go back on the matched function itself. The old
+redirect of an auxiliary match to the device's main function was wrong for this data:
+
+- all 192 terminal rows with parts belong to a strip whose main function carries different parts;
+- 51 article-placement rows had parts that differ from their single main function.
+
+Only a row recorded as main that now matches a non-main function is still redirected.
+
+Coverage of a project-wide dry run on the untouched clone (1,022 rows with parts):
+
+| Snapshot | Matched | Already equal | Ambiguous | Skipped (unmatched) |
+|---|---|---|---|---|
+| Before the fix (schema 1, earlier test) | 327 | 325 | 502 | 195 |
+| Schema 1 file, new code (older key) | 522 | 522 | 500 | 0 |
+| Schema 2, key only (`allow_other_project`, no ids) | 654 | 654 | 368 | 0 |
+| Schema 2, same project (ids) | **1,022** | 1,022 | 0 | 0 |
+
+The remaining key-only ties are real duplicates, for example 17 cable functions on one page with
+the same placeholder device tag and the same part. Only the id tells them apart.
+
+**Restore after a loss.** The test cleared the parts of 8 functions with a script, after a dry
+run:
+
+- 2 placed main functions (cables);
+- 2 unplaced main functions;
+- 1 terminal;
+- 1 article placement whose device has a single main function with other parts;
+- 2 cables that were ambiguous under the old key.
+
+The restore then ran:
+
+- The dry run reported `would_change` 8.
+- `limit` 7 was refused, and nothing was written.
+- `limit` 8 wrote 8, all `set` by id and read back.
+- A re-run changed nothing and reported `dry_run: false`.
+
+A fresh snapshot equals the original row for row, 8,687 ids, 0 differences. That includes the
+strip's main function and the article placement's main function, which were not touched. The
+function ids did not change through the parts removal and restore. After an EPLAN restart and a
+reopen, a dry restore again matched all 1,022 rows by id.
+
+**Small items:**
+
+- `text_create` refuses an empty or whitespace-only text.
+- `line_styles` refuses a partial area, naming the corners it got. All four corners, or none,
+  work as before (3 and 33 lines).
+- A restore with nothing to do reports the real `dry_run`.
+- A text whose bounds read 0,0,0,0 reports `bounds: null` with `bounds_reason`. On this project,
+  the 5 such texts belonged to one symbol type and did have values. So the reason names both
+  causes: an empty value, or a symbol type EPLAN computes no bounds for.
+- The stale-handle message says the object no longer exists, or the symbol's texts changed, and
+  to re-read.
+
+**Bootstrap runtime:** `parts_snapshot` (8,687 functions, 1,022 with parts) and `text_placements`
+passed.
+
+No dialog that the test did not open appeared, and the "Project master data" watcher dismissed
+nothing. The clone was discarded and its marker removed. EPLAN was left running with no project
+open, and the shared add-ins load as before.
