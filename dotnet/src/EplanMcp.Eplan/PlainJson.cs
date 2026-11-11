@@ -47,6 +47,25 @@ namespace EplanMcp.Eplan
         }
 
         /// <summary>
+        /// The rows of the snapshot file named by argument <paramref name="fileArg"/>, after
+        /// <see cref="Guards.CheckSnapshot"/> accepted it for <paramref name="project"/>. Throws
+        /// with the reason otherwise, so a restore never starts from a wrong or foreign file.
+        /// </summary>
+        public static List<Dictionary<string, object?>> ReadSnapshot(ScriptArgs args, string fileArg, string kind, int schema,
+            string? project, bool allowOtherProject)
+        {
+            var file = args.String(fileArg);
+            if (string.IsNullOrEmpty(file) || !File.Exists(file))
+                throw new ArgumentException($"Pass '{fileArg}': an existing {kind} snapshot file.");
+            object? parsed;
+            try { parsed = Parse(File.ReadAllText(file!, Encoding.UTF8)); }
+            catch (JsonException ex) { throw new ArgumentException($"'{file}' is not JSON: {ex.Message}"); }
+            var error = Guards.CheckSnapshot(parsed, kind, schema, project, allowOtherProject, out var rows);
+            if (error != null) throw new ArgumentException($"'{file}': {error}");
+            return rows;
+        }
+
+        /// <summary>
         /// The rows in argument <paramref name="name"/>: a JSON array of objects, or a string holding
         /// one. Throws when the argument is missing, is not JSON, or yields no objects, so a mistyped
         /// argument never reads as "nothing to do".
