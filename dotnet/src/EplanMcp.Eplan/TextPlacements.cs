@@ -211,7 +211,7 @@ namespace EplanMcp.Eplan
         public static string? SharedHeightRefusal(SymbolReference? owner)
         {
             if (owner == null) return null;
-            bool local = Safe.Maybe(() => owner.UseLocalPropertyPlacements) ?? true;
+            bool local = Safe.Maybe(() => owner.UseLocalPropertyPlacements) ?? false;   // unreadable counts as shared
             return local ? null :
                 "EPLAN does not allow changing the height or font size of a property text that the symbol shows from its variant " +
                 "(shared_placements=true): the variant's placements are write-protected, so nothing was written. Use " +
@@ -233,7 +233,7 @@ namespace EplanMcp.Eplan
             if (height.HasValue && !(height.Value > 0) && Math.Abs(height.Value - FromLayer) > 0.0001)
                 return Fail(data, $"height must be greater than 0 mm, or {FromLayer} for 'from layer'.");
             if (target != "height" && target != "font_size") return Fail(data, "target must be 'height' or 'font_size'.");
-            var refusal = SharedRefusal(owner, allowShared) ?? SharedHeightRefusal(owner);
+            var refusal = SharedHeightRefusal(owner) ?? SharedRefusal(owner, allowShared);   // a variant text is refused whatever allow_shared says
             if (refusal != null) return Fail(data, refusal);
 
             double? before = Safe.Maybe(() => text.Height);
