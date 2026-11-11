@@ -34,7 +34,7 @@ namespace EplanMcp.Eplan
 
         /// <summary>
         /// Rows from the argument <paramref name="rowsArg"/> (inline JSON array) or, only when that
-        /// argument is absent, from the file named by <paramref name="fileArg"/>. Throws when neither
+        /// argument is absent, from the file named by <paramref name="fileArg"/>. Refuses (<see cref="ScriptRefusedException"/>) when neither
         /// is given, or when <paramref name="rowsArg"/> is given but holds no rows.
         /// </summary>
         public static List<Dictionary<string, object?>> RowsFromArgs(ScriptArgs args, string rowsArg, string fileArg)
@@ -42,26 +42,37 @@ namespace EplanMcp.Eplan
             if (args.Has(rowsArg)) return RequireRows(args, rowsArg);
             var file = args.String(fileArg);
             if (string.IsNullOrEmpty(file) || !File.Exists(file))
-                throw new ArgumentException($"Pass '{rowsArg}' (a JSON array) or '{fileArg}' (an existing file).");
+                throw new ScriptRefusedException($"Pass '{rowsArg}' (a JSON array) or '{fileArg}' (an existing file).");
             return Rows(File.ReadAllText(file!, Encoding.UTF8));
         }
 
         /// <summary>
         /// The rows of the snapshot file named by argument <paramref name="fileArg"/>, after
-        /// <see cref="Guards.CheckSnapshot"/> accepted it for <paramref name="project"/>. Throws
+        /// <see cref="Guards.CheckSnapshot"/> accepted it for <paramref name="project"/>. Refuses
         /// with the reason otherwise, so a restore never starts from a wrong or foreign file.
         /// </summary>
         public static List<Dictionary<string, object?>> ReadSnapshot(ScriptArgs args, string fileArg, string kind, int schema,
-            string? project, bool allowOtherProject)
+            string? project, bool allowOtherProject) =>
+            ReadSnapshot(args, fileArg, kind, schema, project, allowOtherProject, out _, out _);
+
+        /// <summary><see cref="ReadSnapshot(ScriptArgs, string, string, int, string?, bool)"/>, also giving
+        /// the file's schema and the project it was taken from.</summary>
+        public static List<Dictionary<string, object?>> ReadSnapshot(ScriptArgs args, string fileArg, string kind, int schema,
+            string? project, bool allowOtherProject, out int fileSchema, out string fileProject)
         {
+            fileSchema = 0;
+            fileProject = "";
             var file = args.String(fileArg);
             if (string.IsNullOrEmpty(file) || !File.Exists(file))
-                throw new ArgumentException($"Pass '{fileArg}': an existing {kind} snapshot file.");
+                throw new ScriptRefusedException($"Pass '{fileArg}': an existing {kind} snapshot file.");
             object? parsed;
             try { parsed = Parse(File.ReadAllText(file!, Encoding.UTF8)); }
-            catch (JsonException ex) { throw new ArgumentException($"'{file}' is not JSON: {ex.Message}"); }
+            catch (JsonException ex) { throw new ScriptRefusedException($"'{file}' is not JSON: {ex.Message}"); }
             var error = Guards.CheckSnapshot(parsed, kind, schema, project, allowOtherProject, out var rows);
-            if (error != null) throw new ArgumentException($"'{file}': {error}");
+            if (error != null) throw new ScriptRefusedException($"'{file}': {error}");
+            var envelope = (IDictionary<string, object?>)parsed!;
+            fileSchema = (int)Num(envelope, "schema");
+            fileProject = Str(envelope, "project");
             return rows;
         }
 
@@ -73,17 +84,17 @@ namespace EplanMcp.Eplan
         public static List<Dictionary<string, object?>> RequireRows(ScriptArgs args, string name)
         {
             var raw = args.Json(name);
-            if (string.IsNullOrWhiteSpace(raw)) throw new ArgumentException($"Missing argument '{name}' (a JSON array of objects).");
+            if (string.IsNullOrWhiteSpace(raw)) throw new ScriptRefusedException($"Missing argument '{name}' (a JSON array of objects).");
             object? value;
             try
             {
                 value = Parse(raw!);
                 if (value is string text) value = Parse(text);   // an array sent as JSON text
             }
-            catch (JsonException ex) { throw new ArgumentException($"Argument '{name}' is not a JSON array of objects: {ex.Message}"); }
+            catch (JsonException ex) { throw new ScriptRefusedException($"Argument '{name}' is not a JSON array of objects: {ex.Message}"); }
             var rows = Rows(value);
             if (rows.Count == 0)
-                throw new ArgumentException($"Argument '{name}' was given but holds no objects; pass a JSON array of objects such as [{{\"name\": ...}}].");
+                throw new ScriptRefusedException($"Argument '{name}' was given but holds no objects; pass a JSON array of objects such as [{{\"name\": ...}}].");
             return rows;
         }
 

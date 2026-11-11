@@ -26,15 +26,15 @@ namespace EplanMcp.Scripting.Core
             if (!writeAllowed)
             {
                 if (!full.StartsWith(folder.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-                    throw new ArgumentException($"A run that may not write can only write files inside its run folder ({folder}); '{requested}' is outside it. Pass a file name, or leave 'out' empty.");
+                    throw new ScriptRefusedException($"'out' must be inside this run's folder: a read-only run writes files only there ({folder}), and '{requested}' is outside it. Pass a bare file name (it is written in the run folder) or leave 'out' empty, then copy the file from the 'out' path in the result.");
                 return full;
             }
 
             if (EplanDataExtensions.Contains(Path.GetExtension(full), StringComparer.OrdinalIgnoreCase))
-                throw new ArgumentException($"'{requested}' is an EPLAN project or library file; output never goes there.");
+                throw new ScriptRefusedException($"'{requested}' is an EPLAN project or library file; output never goes there. Pass a .json path outside the project, or leave 'out' empty.");
             var parts = full.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             if (parts.Take(parts.Length - 1).Any(p => p.EndsWith(".edb", StringComparison.OrdinalIgnoreCase)))
-                throw new ArgumentException($"'{requested}' is inside an EPLAN project folder (*.edb); output never goes there.");
+                throw new ScriptRefusedException($"'{requested}' is inside an EPLAN project folder (*.edb); output never goes there. Pass a path outside the project, or leave 'out' empty.");
             return full;
         }
     }

@@ -134,6 +134,18 @@ namespace EplanMcp.Scripting.Core.Tests
         }
 
         [Fact]
+        public void Refusal_is_a_clean_error_result_without_a_stack_trace()
+        {
+            var res = RunPipeline.Execute(Req("throw new EplanMcp.Scripting.Core.ScriptRefusedException(\"page 'X' not found\");"), new TestEnvironment(), Audit);
+            Assert.True(res.Ok, res.Error);
+            Assert.Equal("done", res.Phase);
+            Assert.Null(res.Error);
+            Assert.Equal("page 'X' not found", ((JsonNode)res.Result!)["error"]!.GetValue<string>());
+            Assert.DoesNotContain(" at ", ((JsonNode)res.Result!).ToJsonString());
+            Assert.True(res.Unloaded);
+        }
+
+        [Fact]
         public void Unbounded_loop_without_budget_check_is_rejected()
         {
             var res = RunPipeline.Execute(Req("while (true) { }"), new TestEnvironment(), Audit);
@@ -271,9 +283,9 @@ namespace EplanMcp.Scripting.Core.Tests
             var run = Path.Combine(Path.GetTempPath(), "eplanmcp-run");
             Assert.Equal(Path.Combine(run, "a.json"), OutputPath.Resolve(run, false, null, "a.json"));
             Assert.Equal(Path.Combine(run, "sub", "b.json"), OutputPath.Resolve(run, false, Path.Combine("sub", "b.json"), "a.json"));
-            Assert.Throws<ArgumentException>(() => OutputPath.Resolve(run, false, Path.Combine(Path.GetTempPath(), "elsewhere.json"), "a.json"));
-            Assert.Throws<ArgumentException>(() => OutputPath.Resolve(run, false, Path.Combine("..", "up.json"), "a.json"));
-            Assert.Throws<ArgumentException>(() => OutputPath.Resolve(run, false, run + "10" + Path.DirectorySeparatorChar + "x.json", "a.json"));
+            Assert.Throws<ScriptRefusedException>(() => OutputPath.Resolve(run, false, Path.Combine(Path.GetTempPath(), "elsewhere.json"), "a.json"));
+            Assert.Throws<ScriptRefusedException>(() => OutputPath.Resolve(run, false, Path.Combine("..", "up.json"), "a.json"));
+            Assert.Throws<ScriptRefusedException>(() => OutputPath.Resolve(run, false, run + "10" + Path.DirectorySeparatorChar + "x.json", "a.json"));
         }
 
         [Fact]
@@ -282,10 +294,10 @@ namespace EplanMcp.Scripting.Core.Tests
             var run = Path.Combine(Path.GetTempPath(), "eplanmcp-run");
             var elsewhere = Path.Combine(Path.GetTempPath(), "out", "report.json");
             Assert.Equal(elsewhere, OutputPath.Resolve(run, true, elsewhere, "a.json"));
-            Assert.Throws<ArgumentException>(() => OutputPath.Resolve(run, true, Path.Combine(Path.GetTempPath(), "p.edb", "x.json"), "a.json"));
-            Assert.Throws<ArgumentException>(() => OutputPath.Resolve(run, true, Path.Combine(Path.GetTempPath(), "p.elk"), "a.json"));
-            Assert.Throws<ArgumentException>(() => OutputPath.Resolve(run, true, Path.Combine(Path.GetTempPath(), "lib.SLK"), "a.json"));
-            Assert.Throws<ArgumentException>(() => OutputPath.Resolve(run, true, Path.Combine(Path.GetTempPath(), "x.sdb"), "a.json"));
+            Assert.Throws<ScriptRefusedException>(() => OutputPath.Resolve(run, true, Path.Combine(Path.GetTempPath(), "p.edb", "x.json"), "a.json"));
+            Assert.Throws<ScriptRefusedException>(() => OutputPath.Resolve(run, true, Path.Combine(Path.GetTempPath(), "p.elk"), "a.json"));
+            Assert.Throws<ScriptRefusedException>(() => OutputPath.Resolve(run, true, Path.Combine(Path.GetTempPath(), "lib.SLK"), "a.json"));
+            Assert.Throws<ScriptRefusedException>(() => OutputPath.Resolve(run, true, Path.Combine(Path.GetTempPath(), "x.sdb"), "a.json"));
         }
 
         [Fact]

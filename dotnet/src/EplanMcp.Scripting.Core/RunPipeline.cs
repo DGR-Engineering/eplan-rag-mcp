@@ -283,6 +283,13 @@ namespace EplanMcp.Scripting.Core
         private static Isolated RunIsolated(byte[] image, object ctx)
         {
             var outcome = ScriptRunner.Run(image, ctx, value => Json.ToPlain(value));
+            // An expected refusal is the script's answer, not a failure: {"error": message}, no stack.
+            if (outcome.Error is ScriptRefusedException refused)
+                return new Isolated
+                {
+                    Value = new System.Text.Json.Nodes.JsonObject { ["error"] = refused.Message },
+                    Context = outcome.Context,
+                };
             return new Isolated
             {
                 Value = outcome.Value as System.Text.Json.Nodes.JsonNode,

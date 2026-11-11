@@ -20,6 +20,8 @@ public static class Script
     public static object Run(ScriptContext ctx)
     {
         var project = ctx.RequireProject();
+        // Every refusal comes before the first write: the out path too.
+        var path = PlainJson.OutPath(ctx, ctx.Args.String("out"), "macrobox_restore.json");
         var rows = PlainJson.ReadSnapshot(ctx.Args, "snapshot", "macrobox", 1, project.ProjectName, ctx.Args.Bool("allow_other_project"));
         bool update = ctx.Args.Bool("update_existing");
         var result = MacroBoxes.Restore(ctx, project, rows, update, dryRun: true);
@@ -30,7 +32,7 @@ public static class Script
             if (refusal != null) { result["error"] = refusal; result["dry_run"] = true; }
             else result = MacroBoxes.Restore(ctx, project, rows, update, dryRun: false);
         }
-        var path = PlainJson.OutPath(ctx, ctx.Args.String("out"), "macrobox_restore.json");
+        else if (!ctx.DryRun) result["dry_run"] = false;   // nothing to do: still report the real call
         result["bytes"] = PlainJson.Write(path, result["rows"]);
         result["out"] = path;
         result.Remove("rows");

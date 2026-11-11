@@ -17,7 +17,7 @@ public static class Script
     {
         var project = ctx.RequireProject();
         var pages = ctx.Args.List("pages");
-        if (pages.Count == 0) throw new ArgumentException("'pages' is required");
+        if (pages.Count == 0) return new { error = "'pages' is required: a list of page names." };
         var rows = MacroBoxes.Links(ctx, project, pages);
         var path = PlainJson.OutPath(ctx, ctx.Args.String("out"), "macrobox_links.json");
         return new { project = project.ProjectFullName, boxes = rows.Count, @out = path, bytes = PlainJson.Write(path, rows) };

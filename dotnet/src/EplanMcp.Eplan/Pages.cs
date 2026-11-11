@@ -38,9 +38,9 @@ namespace EplanMcp.Eplan
             return page;
         }
 
-        /// <summary>The page, or an exception carrying the not-found message.</summary>
+        /// <summary>The page, or a refusal (<c>{"error": ...}</c>) carrying the not-found message.</summary>
         public static Page Require(Project project, string? name, bool allowPartial = false) =>
-            Find(project, name, out var error, allowPartial) ?? throw new ArgumentException(error);
+            Find(project, name, out var error, allowPartial) ?? throw new EplanMcp.Scripting.Core.ScriptRefusedException(error ?? "page not found");
 
         /// <summary>Everything placed on the page, through the finder (never null).</summary>
         public static Placement[] Placements(Page page) =>

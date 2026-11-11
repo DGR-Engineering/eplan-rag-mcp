@@ -62,7 +62,7 @@ namespace EplanMcp.Scripting
 
         /// <summary>The project, or a clear error when none is open.</summary>
         public Project RequireProject() =>
-            Project ?? throw new InvalidOperationException("No project to act on. Open a project (a scratch clone for writes) or pass the 'project' argument.");
+            Project ?? throw new ScriptRefusedException("No project to act on. Open a project (a scratch clone for writes) or pass the 'project' argument.");
 
         /// <summary>Locks an object for writing (SmartLock also locks the parent page). Refuses when
         /// the run may not write, is a dry run, or the object does not belong to <see cref="Project"/>
@@ -148,6 +148,6 @@ namespace EplanMcp.Scripting
             "{" + string.Join(",", _raw.Select(kv => JsonSerializer.Serialize(kv.Key) + ":" + (Json(kv.Key) ?? "null"))) + "}";
 
         public string Require(string name) =>
-            String(name) ?? throw new ArgumentException($"Missing required argument '{name}'.");
+            String(name) ?? throw new ScriptRefusedException($"Missing required argument '{name}'.");
     }
 }

@@ -16,7 +16,7 @@ public static class Script
     {
         var project = ctx.RequireProject();
         var pages = ctx.Args.List("pages");
-        if (pages.Count == 0) throw new ArgumentException("'pages' is required");
+        if (pages.Count == 0) return new { error = "'pages' is required: a list of page names." };
         var rows = MacroBoxes.PrepareInspect(ctx, project, pages);
         var path = PlainJson.OutPath(ctx, ctx.Args.String("out"), "macro_prepare_inspect.json");
         return new

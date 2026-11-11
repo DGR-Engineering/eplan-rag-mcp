@@ -108,13 +108,13 @@ namespace EplanMcp.Scripting.Tests
             ScriptArgs Args(string json) => new ScriptArgs(Json.Deserialize<Dictionary<string, object?>>(json));
             Assert.Single(PlainJson.RequireRows(Args("{\"moves\":[{\"name\":\"K1\"}]}"), "moves"));
             Assert.Single(PlainJson.RequireRows(Args("{\"moves\":\"[{\\\"name\\\":\\\"K1\\\"}]\"}"), "moves"));   // JSON sent as text
-            Assert.Throws<ArgumentException>(() => PlainJson.RequireRows(Args("{\"moves\":[]}"), "moves"));
-            Assert.Throws<ArgumentException>(() => PlainJson.RequireRows(Args("{\"moves\":\"K1\"}"), "moves"));
-            Assert.Throws<ArgumentException>(() => PlainJson.RequireRows(Args("{}"), "moves"));
+            Assert.Throws<ScriptRefusedException>(() => PlainJson.RequireRows(Args("{\"moves\":[]}"), "moves"));
+            Assert.Throws<ScriptRefusedException>(() => PlainJson.RequireRows(Args("{\"moves\":\"K1\"}"), "moves"));
+            Assert.Throws<ScriptRefusedException>(() => PlainJson.RequireRows(Args("{}"), "moves"));
             // rows given but empty: an error, never a silent fall back to from_file
             var file = Path.GetTempFileName();
             File.WriteAllText(file, "[{\"page\":\"1\"}]");
-            Assert.Throws<ArgumentException>(() => PlainJson.RowsFromArgs(Args("{\"rows\":[1,2],\"from_file\":" + Json.Serialize(file) + "}"), "rows", "from_file"));
+            Assert.Throws<ScriptRefusedException>(() => PlainJson.RowsFromArgs(Args("{\"rows\":[1,2],\"from_file\":" + Json.Serialize(file) + "}"), "rows", "from_file"));
             Assert.Single(PlainJson.RowsFromArgs(Args("{\"from_file\":" + Json.Serialize(file) + "}"), "rows", "from_file"));
         }
 
