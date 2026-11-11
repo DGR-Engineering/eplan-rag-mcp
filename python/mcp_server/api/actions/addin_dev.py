@@ -325,7 +325,9 @@ def addin_update(manifest: str, restart: bool = False, do_build: bool = True,
     return {"success": ok, "steps": steps}
 
 
-# A build runs MSBuild targets from the project: it may run build code, so it is not read-only.
-addin_build.__mcp_annotations__ = {"readOnlyHint": False}
-addin_deploy.__mcp_annotations__ = {"readOnlyHint": False, "destructiveHint": True}
-addin_update.__mcp_annotations__ = {"readOnlyHint": False, "destructiveHint": True}
+# Flags for tool_annotations. A build runs MSBuild targets from the project: it may run build
+# code, so it is not read-only. Deploying overwrites the add-in EPLAN loads.
+addin_build.__tool_flags__ = "code"
+addin_deploy.__tool_flags__ = "code eplan destructive"
+addin_update.__tool_flags__ = "code eplan destructive"
+list_addin_actions.__tool_flags__ = "read"

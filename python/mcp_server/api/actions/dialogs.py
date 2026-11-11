@@ -1,88 +1,101 @@
 """
-See and dismiss EPLAN's dialogs without going through EPLAN.
+See and answer EPLAN's dialogs without going through EPLAN.
 
-A modal prompt (for example "Project master data") blocks every remoting
-call, so eplan_ping and eplan_get_system_messages cannot report it. These
-tools read the windows straight from Windows instead, so they work while
-EPLAN is blocked and even without a connection. Every dialog a call runs into
-and every click is recorded in dialogs.jsonl, so eplan_dialog_history can say
-which prompts are expected and how they were answered.
+A modal prompt blocks every remoting call, so eplan_ping and
+eplan_get_system_messages cannot report it. These tools read the windows
+straight from Windows instead, so they work while EPLAN is blocked and even
+without a connection (they then look at every local EPLAN.exe). Every dialog
+a call runs into and every click is recorded in dialogs.jsonl, so
+eplan_dialog_history can say which prompts are expected and how they were
+answered.
+
+Safe buttons are recognised in any language (see ui_windows).
 """
 
 import ui_windows
-from eplan_connection import get_manager, eplan_pids, pid_alive, eplan_state, record_dialog
+from eplan_connection import get_manager, eplan_pids, eplan_state, record_dialog
 from eplan_connection import dialog_history as _history
 
 
 def _pids():
-    """The connected EPLAN's PID when known, else every local EPLAN.exe."""
-    pid = getattr(get_manager(), "pid", None)
-    # A stale pid (EPLAN closed outside the MCP, PID since reused) must not
-    # aim a click at another program.
-    if pid and pid_alive(pid) is not False:
-        return {pid}
+    """The connected EPLAN's PID when known and running, else every local EPLAN.exe.
+    Empty for a remote connection: its windows are not on this machine."""
+    manager = get_manager()
+    if manager.connected:
+        return manager._watch_pids()
     return set(eplan_pids())
 
 
 def list_dialogs(include_main: bool = False) -> dict:
     """
-    List EPLAN's open windows and dialogs, read from Windows (never blocks on EPLAN).
+    List EPLAN's open windows and dialogs, read from Windows (never waits on EPLAN).
 
-    Use this when a call returns errorType EplanBlockedByDialog or EplanBusy,
-    or eplan_ping times out: it shows the prompt EPLAN is waiting on. Works
-    without a connection (it then looks at every running EPLAN.exe).
+    Use this when a call returns errorType EplanBlockedByDialog, EplanBusy or
+    EplanActionTimeout, or eplan_ping times out: it shows the prompt EPLAN is
+    waiting on. Works without a connection.
 
     Args:
         include_main: Also list EPLAN's main window (default False).
 
     Returns:
-        windows: one entry per visible window - hwnd, pid, title, class,
-            owner, enabled, is_main, buttons (captions), text (the prompt's
-            message lines), has_progress, blocking (True when EPLAN is
-            waiting on it), and modal (blocking with EPLAN's main window
-            disabled behind it; only these refuse a call before it is sent).
-        modal_suspected: True when any window is blocking.
+        windows: one per visible window - hwnd, pid, title, class, owner,
+            enabled, buttons [{text, id, safe}], text (the prompt's lines),
+            has_progress, owner_disabled, foreground, blocking (EPLAN is
+            waiting on it), modal (blocking with its owner or EPLAN's main
+            window disabled; only these refuse a call before it is sent) and
+            suggested_button (least committal safe button, on blocking ones).
+        blocking_count: how many windows EPLAN is waiting on.
         eplan_state: "not_responding" when Windows flags EPLAN Not Responding
             (frozen, or a heavy computation that may still finish),
             "responding", or "unknown".
-        Dismiss one with eplan_click_dialog_button(hwnd, button, title).
+        Answer one with eplan_click_dialog_button(hwnd, button, window_title).
     """
     pids = _pids()
+    if not pids:
+        return {"success": False, "errorType": "EplanNotFound",
+                "error": "No local EPLAN.exe is running (or the connection is to "
+                         "another machine, whose windows cannot be read from here).",
+                "windows": []}
+    # suggested_button already honours known prompts (ui_windows.KNOWN_SAFE_BUTTON).
     windows = ui_windows.list_windows(pids, include_main=include_main)
     return {"success": True, "count": len(windows), "windows": windows,
-            "modal_suspected": any(w["blocking"] for w in windows),
+            "blocking_count": sum(1 for w in windows if w["blocking"]),
             "eplan_state": eplan_state(pids)}
 
 
-def click_dialog_button(hwnd: int, button: str, title: str,
+def click_dialog_button(hwnd: int, button: str, window_title: str,
                         allow_any_button: bool = False) -> dict:
     """
-    Click one button on an EPLAN dialog, after checking it is still the same window.
+    Press one button on an EPLAN dialog, after checking it is still the same window.
 
-    Take hwnd, title and the button caption from eplan_list_dialogs. The click
-    is refused if the window has closed, changed title or is not EPLAN's.
-    Only safe buttons are allowed by default: OK, Cancel, Close, No, Skip.
+    Take hwnd, the title and the button text from eplan_list_dialogs. The click is
+    refused if the window has closed, changed title or is not EPLAN's. By
+    default only safe buttons are pressed - OK, Cancel, Close, No or Skip, in
+    any language (buttons with safe=true in eplan_list_dialogs).
     Safe choices for known prompts:
       - "Project master data" (master data differs from the system's): No,
         which leaves the project's own master data untouched
       - "Eplan Electric P8" error box: OK
-    The interrupted EPLAN call's result is lost: check the state afterwards
+
+    The interrupted EPLAN call's result is unknown: check the state afterwards
     (for example eplan_get_current_project) before carrying on.
 
     Args:
         hwnd: Window handle from eplan_list_dialogs.
-        button: Button caption exactly as listed (the '&' marker is ignored).
-        title: Window title exactly as listed.
-        allow_any_button: Advanced. Allow buttons outside the safe list
-            (for example Yes or Save). Only when the user asked for it.
+        button: Button text as listed (case and the '&' marker are ignored).
+        window_title: The window's title exactly as listed.
+        allow_any_button: Allow a button that is not safe (for example Yes or
+            Save). Only when the user asked for that button.
 
     Returns:
         success, hwnd, title, class, button, closed (the window went away
-        within 2 s). On refusal: errorType DialogNotFound, ButtonNotAllowed or
-        ButtonNotFound, with error and next_step.
+        within 2 s). On refusal: errorType DialogNotFound, ButtonNotFound or
+        ButtonNotAllowed, with error and next_step.
     """
-    result = ui_windows.click_button(hwnd, button, title, _pids(), allow_any=allow_any_button)
-    record_dialog({"event": "clicked", "title": title, "button": ui_windows._norm_button(button),
+    result = ui_windows.click_button(hwnd, button, window_title, _pids(),
+                                     allow_any=bool(allow_any_button))
+    record_dialog({"event": "clicked", "title": window_title,
+                   "button": result.get("button") or ui_windows.norm_caption(button),
                    "success": bool(result.get("success")), "closed": result.get("closed"),
                    "allow_any": bool(allow_any_button)})
     return result

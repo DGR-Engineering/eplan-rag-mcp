@@ -11,7 +11,7 @@ Header -> tool:
     // @tool   name          tool name (prefixed with the library's prefix, "eplan_" for the public one)
     // @desc   ...           description
     // @arg    name type [optional|required] [default=x] description
-    // @writes true|false    only an explicit `false` (and no @unsafe) gives the tool readOnlyHint
+    // @writes true|false    only an explicit `false` (and no @unsafe) makes the tool read-only
 
 A tool that may write (no `@writes false`) defaults to dry_run=True, like the other writing tools:
 the first call shows what would change and changes nothing. A published script tool has no
@@ -93,14 +93,18 @@ def make_tool(path: str, header: dict):
         lines.append("\nArgs:")
         lines += [f"    {a['name']}: {a['desc']}" + (f" One of: {', '.join(a['choices'])}." if a.get("choices") else "")
                   for a in args]
-    lines.append("    project: .elk path or project name; default the focused or only open project.")
+    lines.append("    project: .elk path or project name; default the target project when one is set,"
+                 " else the focused or only open project.")
     if not read_only:
         lines.append("    dry_run: True (default) shows what would change and changes nothing; pass False to apply."
                      " Writes reach only scratch clones (eplan_scratch_project_create).")
     lines.append(f"\nScript: {path}")
     tool.__doc__ = "\n".join(lines)
     tool.__name__ = header.get("tool") or "script"
-    tool.__mcp_annotations__ = {"readOnlyHint": True} if read_only else {}
+    # Flags for tool_annotations, from the header: a writer changes the project; one that also
+    # uses unsafe calls (outside the write guard) may change anything in it.
+    tool.__tool_flags__ = ("read" if read_only else
+                           "project destructive" if "unsafe" in header else "project")
     return tool
 
 

@@ -20,8 +20,8 @@ deliberately do not duplicate them.
 A property spec is one of:
     "31002"                     property id, index 0
     "20901:2"                   property id, index 2
-    "STD.Fn.Lbl.CP01.T01.L"     user-defined property, by identifying name
-    "STD.Fn.Foo:3"              user-defined property, index 3
+    "Acme.Fn.Lbl.CP01.T01.L"    user-defined property, by identifying name
+    "Acme.Fn.Foo:3"             user-defined property, index 3
     name | page | type | handle | partNr | area
                                 pseudo-properties of the object itself;
                                 partNr is every part number on its article
@@ -348,7 +348,7 @@ def live_objects_read(kind: str, where: list = None, read: list = None, limit: i
             empty, notempty. Example: [{"prop": "partNr", "op": "eq",
             "value": "#6-CU-STRANDED-UNSHIELDED-GN"}].
         read: Property specs to read: "31002" (id), "20901:2" (id:index),
-            "STD.Fn.Lbl.CP01.T01.L" (user-defined, by name), or the pseudo
+            "Acme.Fn.Lbl.CP01.T01.L" (user-defined, by name), or the pseudo
             props name / page / type / handle / partNr / area. A property that
             does not apply to an object reads as "ERROR: ...".
         limit: Max objects returned (default 100); "matched" is the true total.

@@ -527,7 +527,9 @@ def assert_isolation(require_root: str = None, protected_roots: list = None,
             "protected_hits": hits, "unresolved": unresolved, "reason": reason}
 
 
-scratch_symbols_status.__mcp_annotations__ = {"readOnlyHint": True}
-assert_isolation.__mcp_annotations__ = {"readOnlyHint": True}
-scratch_symbols_purge.__mcp_annotations__ = {"readOnlyHint": False, "destructiveHint": True}
-scratch_symbols_restore.__mcp_annotations__ = {"readOnlyHint": False, "destructiveHint": True}
+# Flags for tool_annotations: the redirect is an EPLAN setting ($(MD_SYMBOLS)).
+scratch_symbols_status.__tool_flags__ = "read"
+assert_isolation.__tool_flags__ = "read"
+scratch_symbols_create.__tool_flags__ = "eplan"
+scratch_symbols_purge.__tool_flags__ = "eplan destructive"
+scratch_symbols_restore.__tool_flags__ = "eplan destructive"

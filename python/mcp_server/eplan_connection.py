@@ -36,6 +36,7 @@ from connection.dialogs import (
     _SAFEST_BUTTONS,
     DIALOG_LOG,
     NEW_WINDOW_GRACE_S,
+    WINDOW_HINTS,
     _history_cache,
     _history_lock,
     _new_window_grace,
@@ -50,7 +51,9 @@ from connection.processes import (
     _blocking_dialogs,
     _eplan_hwnds,
     _eplan_windows,
+    _list_windows,
     _responding,
+    _top_hwnds,
     eplan_listening_ports,
     eplan_pids,
     eplan_state,
@@ -59,7 +62,10 @@ from connection.processes import (
 from connection.runner import (
     ACTION_TIMEOUT_S,
     DIALOG_CHECK_S,
+    TYPED_FAILURES,
     _dialog_failfast,
+    _env_seconds,
+    action_timeout_s,
     call_with_timeout,
 )
 from connection.shaping import (

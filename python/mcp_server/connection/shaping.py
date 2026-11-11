@@ -65,7 +65,7 @@ RESULT_FIELDS = (
     ("next_step", "on typed failures", "One concrete tool call or instruction that moves the caller forward."),
     ("timed_out", "on EplanBlockedByDialog and EplanActionTimeout", "True: the call was abandoned while EPLAN was still running it, so its result is lost."),
     ("dialogs", "only when a blocking window was seen", "The blocking windows, as listed by eplan_list_dialogs."),
-    ("in_flight_action", "on a timed-out ping while an action is stuck", "The action EPLAN is still busy with."),
+    ("in_flight_action", "on EplanBusy and a timed-out ping while an action is stuck", "The earlier call EPLAN is still busy with."),
     ("eplan_state", "on EplanActionTimeout, EplanBusy and a timed-out ping", "'not_responding' when Windows flags EPLAN's main window Not Responding (frozen, or a heavy computation that may still finish), 'responding', or 'unknown'."),
 
     # --- completed actions EPLAN hung during
@@ -97,10 +97,10 @@ RESULT_FIELD_NAMES = tuple(name for name, _, _ in RESULT_FIELDS)
 # excluded because _log_action writes them itself; "parameters" because the
 # trace records intent, not the full echo.
 #
-# The typed-failure fields stay out too: errorType and error already carry the
-# cause into the trace, and dialogs can be large.
-_NOT_LOGGED = ("success", "action", "parameters",
-               "next_step", "timed_out", "dialogs", "in_flight_action", "hang_note")
+# next_step, dialogs and hang_note stay out too: errorType and error already
+# carry the cause into the trace, and dialogs can be large. timed_out and
+# in_flight_action are logged: they say whether the call's effect is unknown.
+_NOT_LOGGED = ("success", "action", "parameters", "next_step", "dialogs", "hang_note")
 LOGGED_RESULT_KEYS = tuple(n for n in RESULT_FIELD_NAMES if n not in _NOT_LOGGED)
 
 
@@ -116,7 +116,7 @@ def carry_hang_note(src: dict, dst: dict) -> dict:
 class ShapingMixin:
     @staticmethod
     def _typed_failure(error_type, action, error, next_step, dialogs=None, timed_out=False,
-                       eplan_state=None):
+                       eplan_state=None, in_flight_action=None):
         """The shared failure shape for an EPLAN call that did not complete."""
         result = {"success": False, "errorType": error_type, "error": error,
                   "message": error, "next_step": next_step, "action": action}
@@ -126,6 +126,8 @@ class ShapingMixin:
             result["dialogs"] = dialogs
         if eplan_state:
             result["eplan_state"] = eplan_state
+        if in_flight_action:
+            result["in_flight_action"] = in_flight_action
         return result
 
     @staticmethod

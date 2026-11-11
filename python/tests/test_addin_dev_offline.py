@@ -126,11 +126,10 @@ def test_update_falls_back_to_the_scanned_names(repo, monkeypatch):
 
 
 def test_deploying_tools_carry_a_destructive_hint():
-    import tool_hints
+    from tool_annotations import annotate
     for f in (addin_dev.addin_deploy, addin_dev.addin_update):
-        assert tool_hints.annotations_for("eplan_" + f.__name__, f, "eplan_")["destructiveHint"]
-    assert tool_hints.annotations_for("eplan_list_addin_actions",
-                                      addin_dev.list_addin_actions, "eplan_")["readOnlyHint"]
+        assert annotate("eplan_" + f.__name__, f)[0].destructiveHint is True
+    assert annotate("eplan_list_addin_actions", addin_dev.list_addin_actions)[0].readOnlyHint is True
 
 
 def test_published_tools_refuse_a_manifest_path(repo, monkeypatch):
@@ -154,6 +153,6 @@ def test_update_neither_deploys_nor_restarts_by_default(repo, monkeypatch):
 
 
 def test_build_is_not_read_only():
-    import tool_hints
-    assert tool_hints.annotations_for("eplan_addin_build", addin_dev.addin_build,
-                                      "eplan_") == {"readOnlyHint": False}
+    from tool_annotations import annotate
+    annotations, meta = annotate("eplan_addin_build", addin_dev.addin_build)
+    assert annotations.readOnlyHint is False and next(iter(meta.values()))["runsCode"] is True

@@ -5,11 +5,11 @@ It assumes you are connected through one or more of the MCP servers described he
 
 The local `eplan` action server is maintained in this repository. The three
 Cloudflare documentation RAG servers are maintained separately in
-[eplan-cloudflare-rags](https://github.com/covagashi/eplan-cloudflare-rags):
-[P8 2026](https://github.com/covagashi/eplan-cloudflare-rags/tree/main/cloudflare-rag-eplan-p8),
-[P8 2027](https://github.com/covagashi/eplan-cloudflare-rags/tree/main/cloudflare-rag-eplan-2027),
-and [EEC Pro 2026](https://github.com/covagashi/eplan-cloudflare-rags/tree/main/cloudflare-rag-eecpro).
-The [eplan-development skill](https://github.com/covagashi/eplan-development-skill)
+[eplan-cloudflare-rags](https://github.com/Canary-ECAD/eplan-cloudflare-rags):
+[P8 2026](https://github.com/Canary-ECAD/eplan-cloudflare-rags/tree/main/cloudflare-rag-eplan-p8),
+[P8 2027](https://github.com/Canary-ECAD/eplan-cloudflare-rags/tree/main/cloudflare-rag-eplan-2027),
+and [EEC Pro 2026](https://github.com/Canary-ECAD/eplan-cloudflare-rags/tree/main/cloudflare-rag-eecpro).
+The [eplan-scripting skill](https://github.com/Canary-ECAD/eplan-scripting-skill)
 also has its own repository.
 
 Human-readable guides: [English](README.md) · [Español](README.es.md) ·
@@ -39,7 +39,7 @@ Use one of these whenever you are unsure of an exact action name or parameter �
 
 ## 2. The local `eplan` action server
 
-It exposes **253 tools** (full tool-by-tool reference: [the project wiki](https://github.com/covagashi/eplan-rag-mcp/wiki)):
+It exposes **282 tools** (full tool-by-tool reference: [covaga.dev/docs/tools](https://covaga.dev/docs/tools/project-and-workspace-management/)):
 
 - **7 script-host tools** (`eplan_script_hello`, `eplan_script_run`,
   `eplan_script_status`, `eplan_script_cancel`, `eplan_script_list`,
@@ -83,7 +83,55 @@ It exposes **253 tools** (full tool-by-tool reference: [the project wiki](https:
 - **8 connection/utility tools**: `eplan_versions`, `eplan_servers`,
   `eplan_connect`, `eplan_status`, `eplan_ping`, `eplan_test`,
   `eplan_disconnect`, `eplan_list_extensions`.
-- **223 EPLAN action tools** → `eplan_<action>` (e.g. `eplan_open_project`).
+- **259 EPLAN action tools** → `eplan_<action>` (e.g. `eplan_open_project`).
+  Includes 2 Data Portal tools that use EPLAN's own Data Portal sign-in:
+  `eplan_dataportal_search_count` (read-only) and
+  `eplan_dataportal_add_to_download_list`, which only *queues* parts - the
+  download is a dialog in EPLAN, so its result carries a `userAction` the model
+  must relay to the user before waiting on the import. On EPLAN 2025 queuing
+  opens EPLAN's Data Portal window and the action only finishes once the user
+  closes it, so the tool runs the action from a timer after its script returns
+  and comes back within a few seconds with `status: "dataportal_window_open"`
+  and `executed: null`: the user checks the download list in that window,
+  downloads it and closes it. Do not queue the same parts again; a request made
+  while that window is open is refused (`errorType: "DataPortalWindowOpen"`)
+  without reaching EPLAN, and the next call reports the earlier verdict in
+  `earlierResults`. While the window is open EPLAN takes no other commands
+  (`eplan_ping` still answers): those calls return `EplanBlockedByDialog`, whose
+  `next_step` says to have the user finish in that window, not to click it.
+  Both are flagged
+  `network` (`openWorldHint: true`): they reach the Data Portal.
+  Includes 3 tools that work **only on EPLAN 2027 and later**, built on API
+  members new in 2027: `eplan_live_read_terminal_jumpers` (terminal
+  jumpers/bridges via `Terminal.GetJumpers`), `eplan_parts_db_export_edz`
+  (export named parts, with their referenced data, to an EDZ file) and
+  `eplan_remove_unused_user_properties` (preview, then remove unused
+  user-defined property definitions from the project or the parts database;
+  removing needs `confirm=True`, plus `allow_real_project=True` outside the
+  scratch root for a project). Connected to an older EPLAN they return
+  `errorType: EplanVersionUnsupported` at once, without running anything.
+  Includes `eplan_live_set_target_project` (pin every later call to one open
+  project by its .elk path - reflection scripts then pick it from
+  `ProjectManager.OpenProjects` and action wrappers fill an omitted
+  `PROJECTNAME` with it, so the user clicking another project in EPLAN cannot
+  redirect a write; set it right after opening the project) and 10 batched
+  page-operation tools built on ONE C# interpreter that runs a list of ops in
+  one script: `eplan_live_batch` (ops: place, rect, macro, update, move,
+  remove, dimension, line, text - a free page text, bilingual with
+  "es_ES@..;en_US@..;" -, find, read; objects addressed by handle, by device
+  tag, or by `$label` of an earlier op), `eplan_live_find_placements` (by tag -
+  handles do not survive an EPLAN restart, tags do), `eplan_live_place_device`
+  (place + tag + part + properties + function definition in one go; terminals
+  and PLC points fall back to the 2-arg Create automatically),
+  `eplan_live_insert_macro` (a window macro by insertion point or top-left
+  corner, devices tagged), `eplan_live_place_panel_item` (the part's 2D macro,
+  or EPLAN's rectangle fallback), `eplan_live_place_plc_point` (DI/DO/PS/CPS
+  with the right FunctionDefinition), `eplan_live_place_terminal`,
+  `eplan_live_update_placement` (tag/part/properties on an existing object; a
+  duplicate tag is refused unless allowed), `eplan_live_render_page` (export
+  the page to PNG to look at it) and `eplan_live_check_page` (page check +
+  itemized messages + overlapping outlines/texts + duplicate wire labels, in
+  one call). Every write is scratch-only unless `allow_real_project=True`.
   Includes 5 discovery tools (`eplan_settings_list_children`,
   `eplan_list_schemes`, `eplan_list_report_templates`, `eplan_list_layers`,
   `eplan_list_enums`) that enumerate real EPLAN catalogs instead of guessing,
@@ -91,8 +139,12 @@ It exposes **253 tools** (full tool-by-tool reference: [the project wiki](https:
   `eplan_dialog_history`) that read, dismiss and remember EPLAN's prompts
   straight from Windows, so they still work while a modal blocks every other
   call,
-  7 live-DataModel tools (`eplan_live_query_functions`,
-  `eplan_live_query_pages`, `eplan_live_set_function_text`,
+  8 live-DataModel tools (`eplan_live_query_functions`,
+  `eplan_live_query_pages`, `eplan_live_plc_io_list` (the PLC I/O
+  assignment list as JSON: identifier split into =/+/- parts, address,
+  symbolic address, data type, function text per language, module, page,
+  plus the PLC boxes with CPU/rack/slot/device name),
+  `eplan_live_set_function_text`,
   `eplan_live_set_connection_designations`,
   `eplan_live_read_check_messages`, `eplan_live_scale_text`,
   `eplan_live_set_layer`) that read/edit the open project's
@@ -220,6 +272,20 @@ Tools return JSON. Actions typically return:
 read the message; it usually points at a bad parameter or a missing precondition
 (e.g. no project open).
 
+**A call that did not complete** carries one of three `errorType`s and a
+`next_step` to follow:
+
+- `EplanBlockedByDialog` — EPLAN stopped at a prompt (it is in `dialogs`).
+- `EplanActionTimeout` — no answer within `EPLAN_MCP_ACTION_TIMEOUT` (600 s).
+- `EplanBusy` — an earlier abandoned call is still running, so this one was not sent.
+
+In all three the result is **unknown**: EPLAN may still finish the call. Do not
+retry blindly. `eplan_list_dialogs` reads EPLAN's windows from Windows (it works
+while EPLAN is blocked), and `eplan_click_dialog_button` answers one — by
+default only OK, Cancel, Close, No or Skip, in any language. Show the user the
+dialog's text when the answer is theirs to give, then check the state (e.g.
+`eplan_get_current_project`) before carrying on.
+
 `success: true` from a directly-executed utility (`ExecuteScript`) only means
 EPLAN accepted the call. Generated scripts are one-shot `[Start]`-only classes
 run via `ExecuteScript` alone — they are deliberately **not** passed through
@@ -239,7 +305,8 @@ EPLAN's own UI and two wasted remote-API round-trips per call).
    specific one. If `eplan_servers` returns `[]` the connection usually still
    works — that empty list is a known limitation (especially right after EPLAN
    starts), not a failure: `eplan_connect` falls back to the TCP ports
-   EPLAN.exe actually listens on (via netstat), then the default 49152. To
+   EPLAN.exe actually listens on (read from Windows' TCP table, so it works in
+   any Windows language), then the default 49152. To
    reach EPLAN on another machine pass `host` (port required then).
 2. **Pick the project context.** Most actions take an optional `project_name`. If
    omitted, EPLAN uses the **currently selected/open** project. Use
@@ -264,7 +331,12 @@ All of these exist as `eplan_*` tools:
 - **Print:** project or pages.
 - **Check / verify:** project, pages, parts (with verification schemes).
 - **Generate:** connections, cables.
-- **Reports / evaluations:** update reports, model views, copper unfolds,
+- **Reports / evaluations:** `eplan_live_report_types` (the DocumentType
+  names + the report pages the project already has) and
+  `eplan_live_create_report` (add a cover sheet / parts list / terminal
+  diagram / panel legend ... with a given form and generate its pages; the
+  form must already be in the project master data, else S029153 with a
+  hint), update reports, model views, copper unfolds,
   drilling views.
 - **Search:** devices, texts, all properties, page data, project data.
 - **Navigation / editing:** open page, go to device, open layout space, close
@@ -295,12 +367,46 @@ All of these exist as `eplan_*` tools:
   selects pages) so selection-driven tools act on it, not on whatever the
   user last clicked.
 - **Scripted advanced APIs (run as C#):** direct **parts database** queries
-  (`parts_db_*`), **typed settings** get/set
+  (`parts_db_*`; `eplan_parts_db_get_part` also returns every filled record
+  property - ARTICLE_NOTE with the manufacturer's technical text, voltages,
+  pressure, PLC station type - and the function templates), **typed settings** get/set
   (`settings_get/set_string|bool|int|double`), **PathMap** variable substitution,
   and `execute_custom_script` to run arbitrary C# inside EPLAN.
 - **Live DataModel (read/edit the open project via reflection):**
   `eplan_live_query_functions`, `eplan_live_query_pages` (read, with substring
-  filter + result limit), `eplan_live_set_function_text` (write `FUNC_TEXT`,
+  filter + result limit), `eplan_live_plc_io_list` (read: every PLC
+  connection point with address, symbolic address, data type, channel,
+  function text per language, page and module, grouped by =installation so
+  repeated stations map to an array index; use it before `eplan_plc_export`
+  when the PLC programmer only needs the list, not a TIA import file),
+  `eplan_live_panel_captions` / `eplan_live_set_panel_captions` (the
+  property texts next to a panel item - tag, part, type, legend index -
+  with their boxes in page mm; hide/show/move them and set the legend
+  position, always on a LOCAL property arrangement so other items are not
+  dragged along),
+  `eplan_live_copy_pages_to_structure` (repeated stations: copy drawn
+  pages to =ST2, =ST3 ... and retag every device on the copies, keeping the
+  shared ones such as the CPU; wire numbers and PLC addresses are copied
+  as-is and must be renumbered afterwards),
+  `eplan_live_terminal_strips` (every strip with its terminal count and
+  whether it has a terminal strip definition) and
+  `eplan_live_set_terminal_strip_definition` (create the missing
+  definition - unplaced, or placed as SPECIAL/TDEF on a page - with text
+  and part; PLC connection points are not strip terminals),
+  `eplan_live_cables` (cables with their conductors: wire number, colour,
+  cross-section, source, target), `eplan_live_place_cable_definition`
+  (draw the cable definition line across wires, name it with the page's
+  structure, then assign the crossed connections and regenerate; keep the
+  line clear of the wire-number symbols) and
+  `eplan_live_assign_cable_connections` (re-run the geometric assignment
+  for a line placed by hand or moved: EPLAN does not assign conductors to
+  an API-placed line on its own),
+  `eplan_live_project_templates` (the .zw9 basic projects / .ept templates
+  under $(MD_TEMPLATES)) and `eplan_live_create_project` (new project from
+  one of them via ProjectManager.CreateProject, left open and set as the
+  target; the path must be under the scratch root unless
+  allow_real_project),
+  `eplan_live_set_function_text` (write `FUNC_TEXT`,
   defaults to one function at a time, returns the previous value),
   `eplan_live_set_connection_designations` (write the indexed
   `FUNC_CONNECTIONDESIGNATION` property, re-reads after writing to confirm),
@@ -402,6 +508,9 @@ All of these exist as `eplan_*` tools:
   `api/actions/<module>.py`, export it in that package's
   `__init__.py` `__all__`, restart. It auto-registers as `eplan_<name>`. The
   docstring + type hints become the tool description and schema you will see.
+  Then state what it does with one line in `TOOL_FLAGS`
+  (`mcp_server/tool_annotations.py`, see §7) and regenerate `tools.json` with
+  `python tools/dump_tools.py`; the test suite fails until both are done.
 - **EPLAN settings at runtime:** via `eplan_set_setting` /
   `eplan_set_project_setting` (action params `set`/`value`/`index`) or the
   typed `eplan_settings_set_*` scripted tools.
@@ -446,3 +555,30 @@ with unsaved changes, renumbering (devices/pages/cables/terminals/connections),
 restore/backup overwrites, settings changes, `set_*_property`, raw actions, and
 custom C# scripts. Read-only actions (status, search, get current project,
 exports to new files, parts DB queries) are safe to run as needed.
+
+### Tool annotations
+
+You don't have to guess which is which: every tool states it. Each carries the
+four standard MCP annotations, always set explicitly (`readOnlyHint`,
+`destructiveHint`, `idempotentHint`, `openWorldHint`; the last is always false,
+since nothing talks to anything but the local EPLAN), and EPLAN facts in its
+`_meta` under the key `canary-ecad/eplan`:
+
+| Fact | Meaning |
+|---|---|
+| `changesProject` | Writes the open project; back it up before the first such call |
+| `runsCode` | Runs scripts, actions or add-ins it is given; what it does depends on its input |
+| `changesEplan` | Changes EPLAN itself: settings, parts database, master data, ribbon, workspace, add-ins |
+| `projectArgument` | Present when the tool has an argument naming the project (`project_name`, `project_path` or `project`) |
+
+A tool with `readOnlyHint: true` changes nothing. Treat `destructiveHint`,
+`runsCode` or `changesEplan` as "confirm every time". The facts are written by
+hand in `mcp_server/tool_annotations.py` (`TOOL_FLAGS`, one line per tool);
+`python/tools.json` is the published copy, attached to each
+release (`vX.Y.Z` tags) together with the tools added, removed or re-annotated
+since the previous one. Extension modules may give their tools facts with a
+`TOOL_FLAGS = {"function_name": "flags"}` dict; without it they carry no
+annotations, which means "may change anything".
+
+These are facts, not policy: a client such as Bochica decides from them when to
+ask, and may ask more often than they suggest.

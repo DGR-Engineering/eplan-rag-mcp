@@ -34,7 +34,7 @@ import hashlib
 from typing import List
 from ._base import _get_connected_manager, cs_escape
 from cs_json import prepare_script
-from eplan_connection import carry_hang_note
+from eplan_connection import TYPED_FAILURES, carry_hang_note
 
 # A value used as a C# member/identifier (not inside a string literal) cannot
 # be escaped safely - it must be a real identifier. Reject anything else to
@@ -391,9 +391,10 @@ def _execute_script(script_content: str, timeout: float = 30.0, label: str = Non
         exec_result = manager.execute_action(
             f'ExecuteScript /ScriptFile:"{script_path}"', timeout=timeout, label=label
         )
-        if str(exec_result.get("errorType", "")).startswith("Eplan"):
-            # Dialog / timeout / busy / dead: keep the type and next_step.
-            return exec_result
+        if exec_result.get("errorType") in TYPED_FAILURES:
+            # Blocked by a dialog, timed out, busy or EPLAN gone: the script may
+            # have started, so say exactly that instead of "failed to execute".
+            return dict(exec_result)
         if not exec_result.get("success"):
             return {
                 "success": False,
@@ -790,7 +791,16 @@ def parts_db_get_part(part_number: str) -> dict:
     Returns:
         dict with "found" and, when found, "part" carrying PartNr, the three
         descriptions, Manufacturer, Supplier, OrderNr, ProductGroup,
-        ProductSubGroup and GenericProductGroup.
+        ProductSubGroup and GenericProductGroup, plus "Properties": every
+        FILLED record property by its raw name (ARTICLE_NOTE with the
+        manufacturer's technical text - a valve's "5/2 monostable" lives
+        there -, ARTICLE_VOLTAGE, ARTICLE_COILVOLTAGE, ARTICLE_PLCISCPU,
+        ARTICLE_PLCSTATIONTYPE, ARTICLE_PRESSURE_FULL, ARTICLE_FLOW_FULL,
+        ARTICLE_MACRO ...; multilingual values keep EPLAN's
+        "es_ES@...;en_US@...;" form), and "FunctionTemplates": one dict per
+        function template position (what the part becomes when placed:
+        channels, terminal levels, contacts). A PLC programmer reads valve
+        type, sensor range, CPU/station type and telegram hints from here.
 
         Note GenericProductGroup: that is the real name of the MDPart member
         holding a ProductTopGroup value. This function previously read
@@ -866,6 +876,108 @@ public class PartsGet_{uuid.uuid4().hex[:6]}
                     // on 2027.0.1. The old name made the script fail to compile
                     // with CS1061, which surfaced as the same silent timeout.
                     partDict["GenericProductGroup"] = part.GenericProductGroup.ToString();
+
+                    // Every FILLED property of the record, by its raw name
+                    // (ARTICLE_NOTE, ARTICLE_VOLTAGE, ARTICLE_PLCISCPU,
+                    // ARTICLE_PLCSTATIONTYPE, ARTICLE_PRESSURE_FULL ...). This
+                    // is where a valve says "5/2 monostable" (in the note),
+                    // where a CPU says it is one, where a transmitter carries
+                    // its range. Read by reflection so a new EPLAN version's
+                    // extra fields show up without a code change; every value
+                    // is flattened to a string (see Str above).
+                    var filled = new Dictionary<string, object>();
+                    foreach (var pi in props.GetType().GetProperties())
+                    {{
+                        if (pi.GetIndexParameters().Length > 0) continue;
+                        string pn = pi.Name;
+                        if (!(pn.StartsWith("ARTICLE_") || pn.StartsWith("PART_"))) continue;
+                        try
+                        {{
+                            object v = pi.GetValue(props, null);
+                            if (v == null) continue;
+                            bool empty = false;
+                            try {{ var ie = v.GetType().GetProperty("IsEmpty", Type.EmptyTypes); if (ie != null) empty = (bool)ie.GetValue(v, null); }} catch {{ }}
+                            if (empty) continue;
+                            string sv = Str(v);
+                            if (sv == "") continue;
+                            filled[pn] = sv;
+                        }}
+                        catch {{ }}
+                    }}
+                    partDict["Properties"] = filled;
+
+                    // Function templates: what the part becomes when placed
+                    // (PLC card channels, terminal levels, coil + contacts).
+                    var templates = new List<Dictionary<string, object>>();
+                    try
+                    {{
+                        var ftp = part.GetType().GetProperty("FunctionTemplatePositions", Type.EmptyTypes);
+                        object fts = ftp == null ? null : ftp.GetValue(part, null);
+                        if (fts != null)
+                        {{
+                            foreach (object t in (System.Collections.IEnumerable)fts)
+                            {{
+                                if (t == null) continue;
+                                // MDFunctionTemplatePosition / MDPlcTemplatePosition
+                                // expose the useful data as TYPED members, not
+                                // through Properties (which only lists the
+                                // bus-interface odds and ends). Read the typed
+                                // members by name; a member a template kind
+                                // lacks is simply skipped.
+                                var td = new Dictionary<string, object>();
+                                td["Kind"] = t.GetType().Name;
+                                string[] tmembers = new string[] {{
+                                    "FunctionDefinitionCategory", "FunctionDefinitionGroup",
+                                    "FunctionDefinitionId", "ConnectionPointDesignation",
+                                    "ConnectionPointDescription", "ChannelDesignation",
+                                    "SignalRange", "BusSystemKind", "PlcBusInterfaceName",
+                                    "PlugDeviceTag", "PlcSubdeviceIndex", "TemplateGroup",
+                                    "AdditionalDescription", "Symbol", "SymbolMacro",
+                                    "ConnectionPointCrossSection", "IsRelevantToSafety",
+                                    "IsIntrinsicallySafe", "FunctionDefinition", "Description" }};
+                                foreach (string mn in tmembers)
+                                {{
+                                    try
+                                    {{
+                                        var mpi = t.GetType().GetProperty(mn, Type.EmptyTypes);
+                                        if (mpi == null) continue;
+                                        object v = mpi.GetValue(t, null);
+                                        if (v == null) continue;
+                                        string sv = Str(v);
+                                        if (sv == "" || sv.StartsWith("Eplan.")) continue;
+                                        td[mn] = sv;
+                                    }}
+                                    catch {{ }}
+                                }}
+                                try
+                                {{
+                                    var tpp = t.GetType().GetProperty("Properties", Type.EmptyTypes);
+                                    object tprops = tpp == null ? null : tpp.GetValue(t, null);
+                                    if (tprops != null)
+                                        foreach (var pi in tprops.GetType().GetProperties())
+                                        {{
+                                            if (pi.GetIndexParameters().Length > 0 || !pi.Name.StartsWith("FUNC")) continue;
+                                            try
+                                            {{
+                                                object v = pi.GetValue(tprops, null);
+                                                if (v == null) continue;
+                                                bool empty = false;
+                                                try {{ var ie = v.GetType().GetProperty("IsEmpty", Type.EmptyTypes); if (ie != null) empty = (bool)ie.GetValue(v, null); }} catch {{ }}
+                                                if (empty) continue;
+                                                string sv = Str(v);
+                                                if (sv == "" || sv.StartsWith("Eplan.")) continue;
+                                                td[pi.Name] = sv;
+                                            }}
+                                            catch {{ }}
+                                        }}
+                                }}
+                                catch {{ }}
+                                templates.Add(td);
+                            }}
+                        }}
+                    }}
+                    catch (Exception tex) {{ partDict["FunctionTemplatesError"] = tex.Message; }}
+                    partDict["FunctionTemplates"] = templates;
 
                     results["success"] = true;
                     results["found"] = true;

@@ -127,10 +127,8 @@ def test_unknown_preset_is_refused(env):
 
 
 def test_hints():
-    import tool_hints
-    assert tool_hints.annotations_for("eplan_scratch_symbols_status",
-                                      iso.scratch_symbols_status, "eplan_") == {"readOnlyHint": True}
-    assert tool_hints.annotations_for("eplan_assert_isolation",
-                                      iso.assert_isolation, "eplan_") == {"readOnlyHint": True}
-    assert tool_hints.annotations_for("eplan_scratch_symbols_purge",
-                                      iso.scratch_symbols_purge, "eplan_")["destructiveHint"]
+    from tool_annotations import annotate
+    assert annotate("eplan_scratch_symbols_status", iso.scratch_symbols_status)[0].readOnlyHint
+    assert annotate("eplan_assert_isolation", iso.assert_isolation)[0].readOnlyHint
+    assert annotate("eplan_scratch_symbols_purge", iso.scratch_symbols_purge)[0].destructiveHint
+    assert annotate("eplan_scratch_symbols_create", iso.scratch_symbols_create)[0].readOnlyHint is False

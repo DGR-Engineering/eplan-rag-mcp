@@ -12,15 +12,15 @@ Two registration modes, selected with EPLAN_MCP_MODE:
 
 Requirements:
 - EPLAN installed
-- pip install pythonnet mcp
+- pip install pythonnet "mcp<2"
 """
 
-import asyncio
 import json
 import os
 import sys
 import types
 import functools
+import anyio
 from mcp.server.fastmcp import FastMCP
 from eplan_connection import get_manager, detect_installed_versions
 
@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.join(SCRIPT_DIR, "api"))
 import api.actions as eplan_actions
 from api.actions import _project_cache
 from tool_registry import ToolRegistry, make_meta_tools, META_TOOL_NAMES
-import tool_hints
+from tool_annotations import TOOL_FLAGS, annotate
 
 
 # ============================================================================
@@ -97,24 +97,49 @@ def _is_published(tool_name, mode):
     return tool_name in DISCOVERY_CORE_TOOLS or tool_name in DISCOVERY_META_TOOLS
 
 
-def _json_wrapper(f):
-    """Wrap an action function so the MCP tool returns formatted JSON.
+def _threaded(f):
+    """Publish a blocking tool as an async one that runs on a worker thread.
 
-    Async, with the body on a worker thread: FastMCP calls a sync tool on the
-    event loop, so one EPLAN call waiting out its timeout would otherwise stop
-    eplan_list_dialogs / eplan_click_dialog_button from being served at all.
+    FastMCP calls a plain function on its event loop, so one call stuck in
+    EPLAN (a modal dialog) froze the whole server: not even eplan_list_dialogs,
+    whose whole job is to explain the hang, could answer. EPLAN itself still
+    gets one call at a time (EPLANConnectionManager._exec_lock).
     """
 
     @functools.wraps(f)
-    async def mcp_tool_wrapper(*args, **kwargs):
+    async def threaded_tool(*args, **kwargs):
+        return await anyio.to_thread.run_sync(functools.partial(f, *args, **kwargs))
+
+    threaded_tool.__doc__ = f.__doc__ or ""
+    return threaded_tool
+
+
+def _json_wrapper(f):
+    """Wrap an action function so the MCP tool returns formatted JSON, on a
+    worker thread (see _threaded)."""
+
+    @functools.wraps(f)
+    def mcp_tool_wrapper(*args, **kwargs):
         try:
-            res = await asyncio.to_thread(f, *args, **kwargs)
+            res = f(*args, **kwargs)
             return json.dumps(res, indent=2, ensure_ascii=False)
         except Exception as e:
             return json.dumps({"success": False, "error": str(e)}, indent=2)
 
     mcp_tool_wrapper.__doc__ = f.__doc__ or ""
-    return mcp_tool_wrapper
+    return _threaded(mcp_tool_wrapper)
+
+
+def _publish(app, tool_name, func, source=None, table=None):
+    """
+    Register `func` as the MCP tool `tool_name`, with its annotations and EPLAN
+    facts from tool_annotations.py (`source` is the undecorated function, read
+    for the project argument). A tool the table doesn't know is published
+    without them.
+    """
+    annotations, meta = annotate(tool_name, source or func, table)
+    extra = {"annotations": annotations, "meta": meta} if annotations else {}
+    app.tool(name=tool_name, **extra)(func)
 
 
 # ============================================================================
@@ -353,8 +378,7 @@ def _register_core(app, registry, mode):
         if published:
             # Registered raw (not through _json_wrapper): these already return
             # a JSON string, exactly as they did when they were decorated.
-            hints = tool_hints.annotations_for(tool_name, func, "eplan_")
-            app.tool(name=tool_name, annotations=tool_hints.to_mcp(hints))(func)
+            _publish(app, tool_name, _threaded(func), source=func)
 
 
 # ============================================================================
@@ -375,6 +399,11 @@ def register_actions(actions_module, prefix="eplan_", app=None, registry=None, m
     registry = registry if registry is not None else globals().get("REGISTRY")
     mode = mode if mode is not None else MODE
 
+    # An extension module may state its own tools' facts (see tool_annotations.py).
+    own_flags = getattr(actions_module, "TOOL_FLAGS", None)
+    table = ({f"{prefix}{name}": flags for name, flags in own_flags.items()}
+             if isinstance(own_flags, dict) else None)
+
     for func_name in actions_module.__all__:
         if func_name.startswith('_'):
             continue
@@ -393,8 +422,7 @@ def register_actions(actions_module, prefix="eplan_", app=None, registry=None, m
                          published=published)
 
         if published and app is not None:
-            hints = tool_hints.annotations_for(tool_name, func, prefix)
-            app.tool(name=tool_name, annotations=tool_hints.to_mcp(hints))(_json_wrapper(func))
+            _publish(app, tool_name, _json_wrapper(func), source=func, table=table)
 
 
 # ============================================================================
@@ -521,7 +549,7 @@ def build_app(mode="full", app=None, registry=None):
         for attr, func in meta.items():
             tool_name = "eplan_" + attr
             registry.add(tool_name, meta_ns, attr, prefix="eplan_", published=True)
-            app.tool(name=tool_name)(_json_wrapper(func))
+            _publish(app, tool_name, _json_wrapper(func), source=func)
 
     strip_schema_boilerplate(app)
 
@@ -615,32 +643,24 @@ mcp, REGISTRY, _loaded_extensions = build_app(MODE)
 # ============================================================================
 
 if __name__ == "__main__":
-    # The banner MUST go to stderr. Under stdio transport stdout IS the
-    # JSON-RPC channel, and print() buffers into sys.stdout's own
-    # TextIOWrapper while the MCP server writes frames through a second
-    # wrapper on the same fd. The banner then flushes at an arbitrary later
-    # point - observed 24h into a session - splicing its bytes into the
-    # middle of an outgoing frame. The client logs "Ignoring non-JSON line
-    # on stdout", loses that response, and eventually tears the transport
-    # down with "Received a response for an unknown message ID".
-    def _banner(msg):
-        print(msg, file=sys.stderr)
-
+    # stdout is the MCP stdio channel: anything printed there that is not
+    # JSON-RPC can break the client. Status goes to stderr.
+    _log = functools.partial(print, file=sys.stderr)
     installed = detect_installed_versions()
-    _banner("EPLAN MCP Server")
+    _log("EPLAN MCP Server")
     if installed:
         versions = ", ".join(i["full_version"] for i in installed)
-        _banner(f"Installed EPLAN versions: {versions} (auto-targets the newest)")
+        _log(f"Installed EPLAN versions: {versions} (auto-targets the newest)")
     else:
-        _banner("WARNING: no EPLAN installation detected")
-    _banner("-" * 40)
-    _banner(f"Mode: {MODE} ({len(REGISTRY.published_names())} of {len(REGISTRY)} "
-            f"tools published)")
+        _log("WARNING: no EPLAN installation detected")
+    _log("-" * 40)
+    _log(f"Mode: {MODE} ({len(REGISTRY.published_names())} of {len(REGISTRY)} "
+          f"tools published)")
     if MODE == "discovery":
-        _banner("Hidden tools are reachable via eplan_tools_search / "
-                "eplan_tools_describe / eplan_tools_call")
-    _banner("All actions run as eplan_* (C# script under QuietMode)")
-    _banner("-" * 40)
+        _log("Hidden tools are reachable via eplan_tools_search / "
+              "eplan_tools_describe / eplan_tools_call")
+    _log("All actions run as eplan_* (C# script under QuietMode)")
+    _log("-" * 40)
 
     # Transport selection: stdio (default) or streamable-http for running the
     # server on the EPLAN machine and connecting from another machine
@@ -660,7 +680,7 @@ if __name__ == "__main__":
             sys.exit(f"MCP_PORT must be an integer in 1..65535, got {raw_port!r}")
         mcp.settings.host = os.environ.get("MCP_HOST", "127.0.0.1")
         mcp.settings.port = port
-        _banner(f"Transport: streamable-http on {mcp.settings.host}:{mcp.settings.port}")
+        _log(f"Transport: streamable-http on {mcp.settings.host}:{mcp.settings.port}")
         mcp.run(transport="streamable-http")
     elif transport in _STDIO_TRANSPORTS:
         mcp.run()

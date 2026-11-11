@@ -7,19 +7,13 @@ EPLAN_EXE_NAME = "EPLAN.exe"
 
 
 def eplan_pids() -> list:
-    """PIDs of running EPLAN.exe processes (empty list on any error)."""
-    import subprocess
+    """PIDs of running EPLAN.exe processes (empty list on any error).
+
+    Read from the Windows API, not tasklist, whose output is localized: see
+    process_control."""
     try:
-        out = subprocess.run(
-            ["tasklist", "/FI", f"IMAGENAME eq {EPLAN_EXE_NAME}", "/FO", "CSV", "/NH"],
-            capture_output=True, text=True, timeout=15,
-        ).stdout
-        pids = []
-        for line in out.splitlines():
-            parts = [p.strip('"') for p in line.strip().split('","')]
-            if len(parts) >= 2 and parts[0].lower() == EPLAN_EXE_NAME.lower():
-                pids.append(int(parts[1]))
-        return pids
+        from process_control import process_ids
+        return process_ids(EPLAN_EXE_NAME)
     except Exception:
         return []
 
@@ -40,26 +34,27 @@ def pid_alive(pid):
         return None
 
 
-def _blocking_dialogs(pids, windows=None) -> list:
+def _blocking_dialogs(pids, windows=None, new_since=None) -> list:
     """Blocking windows owned by `pids` (or among `windows`, an _eplan_windows
     result already in hand); [] when none, or when ui_windows is missing or
-    fails. Never raises. A module function so tests can replace it."""
+    fails. new_since: hwnds open before the call (see ui_windows.is_blocking).
+    Never raises. A module function so tests can replace it."""
     try:
-        import ui_windows
         if windows is None:
-            windows = ui_windows.list_windows(pids, blocking_only=True)
+            import ui_windows
+            windows = ui_windows.list_windows(pids, new_since=new_since, blocking_only=True)
         return [w for w in windows if w["blocking"]]
     except Exception:
         return []
 
 
-def _eplan_windows(pids, full=False) -> list:
+def _eplan_windows(pids, full=False, new_since=None) -> list:
     """Every non-main window owned by `pids`. Cheap by default: only windows
     that can be blocking have their controls read; full reads them all.
     [] on any failure. Never raises. A module function so tests can replace it."""
     try:
         import ui_windows
-        return ui_windows.list_windows(pids, blocking_only=not full)
+        return ui_windows.list_windows(pids, new_since=new_since, blocking_only=not full)
     except Exception:
         return []
 
@@ -69,9 +64,23 @@ def _eplan_hwnds(pids) -> set:
     set() on any failure. Never raises. A module function so tests can replace it."""
     try:
         import ui_windows
-        return {h for h, _ in ui_windows._top(ui_windows._user32(), pids)}
+        return ui_windows.top_hwnds(pids)
     except Exception:
         return set()
+
+
+# Upstream's names for the two reads above, kept for callers outside the
+# package (dataportal.py). Never raise.
+def _top_hwnds(pids) -> set:
+    return _eplan_hwnds(pids)
+
+
+def _list_windows(pids, new_since=None) -> list:
+    try:
+        import ui_windows
+        return ui_windows.list_windows(pids, new_since=new_since)
+    except Exception:
+        return []
 
 
 def _responding(pids):
@@ -100,7 +109,7 @@ _STATE_WORDS = {
 
 
 def eplan_listening_ports(only_pids=None, pids=None) -> list:
-    """TCP ports EPLAN.exe processes are LISTENING on (via netstat).
+    """TCP ports EPLAN.exe processes are listening on (Windows API, not netstat).
 
     Fallback discovery: GetActiveEplanServersOnLocalMachine is unreliable
     right after EPLAN (re)starts - it can return empty while the remoting
@@ -115,9 +124,8 @@ def eplan_listening_ports(only_pids=None, pids=None) -> list:
             the instance it just started apart from one that was already
             running - see Audit #42 item 12.
         pids: Already-computed result of eplan_pids(). If given, skips the
-            internal tasklist spawn.
+            internal process snapshot.
     """
-    import subprocess
     pids = set(eplan_pids() if pids is None else pids)
     if not pids:
         return []
@@ -127,16 +135,10 @@ def eplan_listening_ports(only_pids=None, pids=None) -> list:
             return []
     ports = []
     try:
-        out = subprocess.run(["netstat", "-ano", "-p", "TCP"],
-                             capture_output=True, text=True, timeout=30).stdout
-        for line in out.splitlines():
-            parts = line.split()
-            # TCP  0.0.0.0:49153  0.0.0.0:0  LISTENING  45472
-            if (len(parts) >= 5 and parts[0] == "TCP" and parts[3] == "LISTENING"
-                    and parts[4].isdigit() and int(parts[4]) in pids):
-                port = parts[1].rsplit(":", 1)[-1]
-                if port.isdigit() and port not in ports:
-                    ports.append(port)
+        from process_control import tcp_listeners
+        for _address, port, pid in tcp_listeners():
+            if pid in pids and str(port) not in ports:
+                ports.append(str(port))
     except Exception:
         pass
     return ports

@@ -3,6 +3,8 @@
 import os
 import time
 
+from connection.dialogs import _button_texts
+from connection.logs import logger
 from connection.processes import (
     _STATE_WORDS,
     _blocking_dialogs,
@@ -18,7 +20,37 @@ from connection.processes import (
 # Upper bound on one ExecuteAction call. Unlike the wait above, this one does
 # bound a hang: a modal dialog or a wedged EPLAN otherwise blocks the call, and
 # the server with it, forever. Generous because full-project exports are slow.
-ACTION_TIMEOUT_S = float(os.environ.get("EPLAN_MCP_ACTION_TIMEOUT", 600))
+# Override with EPLAN_MCP_ACTION_TIMEOUT (seconds), read per call.
+ACTION_TIMEOUT_S = 600.0
+
+# errorType values for an EPLAN call that did not complete. Blocked, timed out
+# and busy calls were abandoned, not failed: EPLAN may still finish them, so
+# their result is unknown. EplanNotRunning: EPLAN died under the call.
+TYPED_FAILURES = ("EplanBlockedByDialog", "EplanActionTimeout", "EplanBusy", "EplanNotRunning")
+
+
+def _env_seconds(name, default):
+    """A positive number of seconds from the environment, else `default`.
+
+    A typo in a client config must never stop the server from starting, so a
+    bad value is logged (to stderr) and ignored rather than raised.
+    """
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+        if value > 0:
+            return value
+    except ValueError:
+        pass
+    logger.warning(f"{name}={raw!r} is not a positive number of seconds; using {default}")
+    return default
+
+
+def action_timeout_s() -> float:
+    """EPLAN_MCP_ACTION_TIMEOUT, read per call so it can change at runtime."""
+    return _env_seconds("EPLAN_MCP_ACTION_TIMEOUT", ACTION_TIMEOUT_S)
 
 # How often a running action is checked for a blocking dialog. Two hits in a
 # row end the wait, so a dialog that flashes up and closes does not.
@@ -94,13 +126,14 @@ class RunnerMixin:
         if not self._inflight:
             return "Wait a few seconds, then retry: another call to EPLAN is finishing."
         age = time.monotonic() - self._inflight_since
-        if age >= ACTION_TIMEOUT_S:
+        limit = action_timeout_s()
+        if age >= limit:
             return (f"EPLAN has been stuck on '{self._inflight}' for {age:.0f}s with no "
                     "dialog found. After confirming with the user, call "
                     "eplan_app_restart(force=True); eplan_connect alone does not unstick EPLAN.")
         return (f"EPLAN is still running '{self._inflight}': wait, then retry. If "
                 "eplan_list_dialogs shows nothing and it is still stuck after "
-                f"{ACTION_TIMEOUT_S:g}s, ask the user before calling "
+                f"{limit:g}s, ask the user before calling "
                 "eplan_app_restart(force=True).")
 
     def _busy_failure(self, action: str) -> dict:
@@ -116,7 +149,7 @@ class RunnerMixin:
             "EplanBusy", action,
             what + ", so this call was not sent." + ("" if dialogs else _STATE_WORDS.get(st, "")),
             self._dialog_next_step(dialogs[0]) if dialogs else self._stuck_next_step(),
-            dialogs=dialogs, eplan_state=st)
+            dialogs=dialogs, eplan_state=st, in_flight_action=running)
 
     def _bounded_execute(self, action: str, label: str = None, timeout: float = None):
         """(_bounded_execute_locked's result, seconds EPLAN was seen Not Responding).
@@ -160,7 +193,7 @@ class RunnerMixin:
             if found:
                 self._note_dialogs(found, "preflight", label)
                 d = found[0]
-                buttons = ", ".join(d.get("buttons") or []) or "none found"
+                buttons = ", ".join(_button_texts(d.get("buttons"))) or "none found"
                 return self._typed_failure(
                     "EplanBlockedByDialog", action,
                     f"EPLAN already has dialog '{d.get('title', '')}' open (buttons: "
@@ -188,7 +221,11 @@ class RunnerMixin:
             state["tick"] = now
             found = learned = suspected = []
             if state["pids"]:
-                windows = _eplan_windows(state["pids"])     # one enumeration per tick
+                # One enumeration per tick. A standard dialog that opened during
+                # the call blocks it even when it disables nothing (an ownerless
+                # MessageBox from a script).
+                windows = (_eplan_windows(state["pids"], new_since=state["before"])
+                           if state["before"] is not None else _eplan_windows(state["pids"]))
                 found = _blocking_dialogs(state["pids"], windows)
                 learned, suspected = self._new_windows(state, windows, found, now, label)
             found = found + learned
@@ -215,7 +252,7 @@ class RunnerMixin:
         self._inflight, self._inflight_since = label, time.monotonic()
         # A caller's own longer budget (e.g. a script's timeout_seconds) wins
         # over the default; it never shortens it.
-        limit = max(ACTION_TIMEOUT_S, timeout or 0)
+        limit = max(action_timeout_s(), timeout or 0)
         dialogs, timed_out, error = call_with_timeout(
             run, limit, abort_check=dialog_check, check_every=DIALOG_CHECK_S)
         # With failfast off a dialog never aborts, but one still up at the
@@ -224,7 +261,7 @@ class RunnerMixin:
             dialogs = state["last"]
         if timed_out and dialogs and dialogs[0].get("suspected"):
             d = dialogs[0]
-            buttons = ", ".join(d.get("buttons") or []) or "none found"
+            buttons = ", ".join(_button_texts(d.get("buttons"))) or "none found"
             return self._typed_failure(
                 "EplanBlockedByDialog", action,
                 f"A new EPLAN window '{d.get('title', '')}' (buttons: {buttons}) appeared "
@@ -235,7 +272,7 @@ class RunnerMixin:
                 "to wait longer.", dialogs=dialogs, timed_out=True)
         if timed_out and dialogs:
             d = dialogs[0]
-            buttons = ", ".join(d.get("buttons") or []) or "none found"
+            buttons = ", ".join(_button_texts(d.get("buttons"))) or "none found"
             return self._typed_failure(
                 "EplanBlockedByDialog", action,
                 f"EPLAN is waiting on dialog '{d.get('title', '')}' (buttons: {buttons}); "
@@ -249,18 +286,20 @@ class RunnerMixin:
                 "blocking dialog is open; it may still be running."
                 + _STATE_WORDS.get(st, ""),
                 "Call eplan_ping until it answers, then verify state. If this action "
-                "legitimately takes longer, set EPLAN_MCP_ACTION_TIMEOUT (seconds) "
-                "and restart the MCP server. If EPLAN never answers and "
+                "legitimately takes longer, set EPLAN_MCP_ACTION_TIMEOUT (seconds; "
+                "read per call). If EPLAN never answers and "
                 "eplan_list_dialogs shows nothing, ask the user before calling "
                 "eplan_app_restart(force=True).",
-                timed_out=True, eplan_state=st)
+                timed_out=True, eplan_state=st, in_flight_action=self._inflight)
+        # Checked even when the call returned cleanly: measured on EPLAN 2027,
+        # ExecuteAction returns without raising when EPLAN is killed under it.
+        if self.pid and self.host in self.LOCAL_HOSTS and pid_alive(self.pid) is False:
+            self.connected = False
+            how = f"failed with: {error}" if error is not None else "did not complete"
+            return self._typed_failure(
+                "EplanNotRunning", action,
+                f"EPLAN (pid {self.pid}) is no longer running; the call {how}",
+                "eplan_app_launch")
         if error is not None:
-            if self.pid and self.host in self.LOCAL_HOSTS and pid_alive(self.pid) is False:
-                self.connected = False
-                return self._typed_failure(
-                    "EplanNotRunning", action,
-                    f"EPLAN (pid {self.pid}) is no longer running; the call failed "
-                    f"with: {error}",
-                    "eplan_app_launch")
             raise error
         return None
