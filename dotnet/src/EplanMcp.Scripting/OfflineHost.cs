@@ -28,6 +28,7 @@ namespace EplanMcp.Scripting
     {
         public const string Runtime = "offline";
 
+        /// <param name="binPath">The product variant's Bin (e.g. ...\Electric P8\&lt;version&gt;\Bin).</param>
         public static int Serve(string binPath, string queueDir, TimeSpan idleTimeout)
         {
             Directory.CreateDirectory(queueDir);
@@ -75,6 +76,10 @@ namespace EplanMcp.Scripting
                 var req = Json.Deserialize<RunRequest>(File.ReadAllText(requestPath, Encoding.UTF8))
                           ?? throw new InvalidDataException("The request file is empty.");
                 if (string.IsNullOrEmpty(req.RunFolder)) req.RunFolder = Path.GetDirectoryName(resultPath) ?? "";
+                // In this process EPLAN loads its API assemblies lazily, so the compile references
+                // would miss any not yet touched (HEServices, MasterData...). Reference them all.
+                foreach (var dll in Directory.GetFiles(Environment.CurrentDirectory, "Eplan.EplApi.*Netu.dll"))
+                    if (!req.References.Contains(dll)) req.References.Add(dll);
                 var result = RunPipeline.Execute(req, new OfflineEnvironment());
                 Write(resultPath, Json.Serialize(result));
             }
