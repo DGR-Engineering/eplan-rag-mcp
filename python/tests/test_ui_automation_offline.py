@@ -107,8 +107,9 @@ def test_watch_stop(ps):
 
 
 def test_ui_drive_is_not_marked_read_only():
-    import tool_hints
-    assert not tool_hints.annotations_for("eplan_ui_drive", ui.ui_drive, "eplan_").get("readOnlyHint")
+    from tool_annotations import annotate
+    annotations, _ = annotate("eplan_ui_drive", ui.ui_drive)
+    assert annotations.readOnlyHint is False and annotations.destructiveHint is True
 
 
 def test_watch_id_is_checked_through_ui_drive_too(ps):

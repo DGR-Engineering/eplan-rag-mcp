@@ -24,13 +24,43 @@ def _new_window_grace() -> float:
         return NEW_WINDOW_GRACE_S
 
 
-# Button order tried when suggesting how to dismiss a dialog: least committal
-# first. Same five as ui_windows.SAFE_BUTTONS, so a suggestion is never refused.
+# Button order tried when suggesting how to dismiss a dialog whose buttons
+# carry no safe flag (an older or hand-made window dict): least committal
+# first. ui_windows.suggest_button does the same in any language.
 _SAFEST_BUTTONS = ("Cancel", "No", "Close", "OK", "Skip")
 
-# Known prompts whose safe answer is not the generic first choice (see
-# eplan_click_dialog_button): Cancel would abort the open outright.
-_KNOWN_SAFE_BUTTON = {"Project master data": "No"}
+# Known prompts whose safe answer is not the generic first choice; one table,
+# so every window dict (list_dialogs, a blocked call's dialogs) agrees.
+from ui_windows import KNOWN_SAFE_BUTTON as _KNOWN_SAFE_BUTTON  # noqa: E402
+
+# Windows a tool knows it made EPLAN open, with what to do about them:
+# (hwnd, title) -> next_step. A call blocked by such a window gets that
+# instruction instead of the generic "which button?". Set and cleared by the
+# tool that opened the window (dataportal.py, for EPLAN 2025's Data Portal
+# window); the title is part of the key because Windows reuses hwnds.
+WINDOW_HINTS = {}
+
+
+def _button_texts(buttons) -> list:
+    """Captions of a window's buttons: ui_windows gives {text, id, safe}
+    dicts; plain strings are accepted too."""
+    return [b.get("text", "") if isinstance(b, dict) else str(b) for b in buttons or []]
+
+
+def _safe_texts(buttons) -> list:
+    """Captions of the buttons safe to press without asking, in any language."""
+    import ui_windows
+    out = []
+    for b in buttons or []:
+        if isinstance(b, dict):
+            safe = b.get("safe")
+            if safe is None:
+                safe = ui_windows.is_safe_button(b.get("text"), b.get("id"))
+            if safe:
+                out.append(b.get("text", ""))
+        elif ui_windows.is_safe_button(b):
+            out.append(str(b))
+    return out
 
 
 # Every blocking dialog a call ran into, and every click, one JSON line each,
@@ -110,17 +140,24 @@ def record_dialog(event: dict) -> None:
 class DialogMixin:
     @staticmethod
     def _dialog_next_step(dialog: dict, sent: bool = True) -> str:
-        buttons = dialog.get("buttons") or []
         title = dialog.get("title", "")
+        hint = WINDOW_HINTS.get((dialog.get("hwnd"), title))
+        if hint:
+            return hint
+        buttons = _button_texts(dialog.get("buttons"))
+        safe = _safe_texts(dialog.get("buttons"))
         then = ("verify state (e.g. eplan_get_current_project): the result of this "
-                "action is lost." if sent else "retry this call.")
+                "action is unknown." if sent else "retry this call.")
         # What this exact prompt was answered with before (dialogs.jsonl).
         past = dialog_history().get(title) or {}
         learned = past.get("learned_button")
         learned = learned if learned in buttons else None
         known = _KNOWN_SAFE_BUTTON.get(title)
-        button = known if known in buttons else next(
-            (b for b in _SAFEST_BUTTONS if b in buttons), None)
+        suggested = dialog.get("suggested_button")
+        button = (known if known in safe else
+                  suggested if suggested in safe else
+                  next((b for b in _SAFEST_BUTTONS if b in safe), None) or
+                  next(iter(safe), None))
         # History is keyed by title alone and one title ("EPLAN") can cover
         # different prompts, so a learned answer is mentioned, never substituted.
         why = ""
@@ -129,7 +166,7 @@ class DialogMixin:
         elif learned:
             why = (f" ({learned!r} answered it {past['clicks'][learned]} times before; "
                    "click it instead only after the user confirms"
-                   + ("" if learned in _SAFEST_BUTTONS else ", with allow_any_button=True")
+                   + ("" if learned in safe else ", with allow_any_button=True")
                    + ")")
         if button is None:
             # Never name an unsafe button: the click would be refused, and the
@@ -140,7 +177,7 @@ class DialogMixin:
             return (f"Show the user dialog {title!r} (eplan_list_dialogs has its text) "
                     f"and {how}{why}. Then {then}")
         return (f"eplan_click_dialog_button(hwnd={dialog.get('hwnd')}, button={button!r}, "
-                f"title={title!r}){why}, then {then}")
+                f"window_title={title!r}){why}, then {then}")
 
     def _note_dialogs(self, dialogs, phase, action) -> None:
         """Record each blocking dialog as "seen" once while it stays open, keyed
@@ -151,7 +188,7 @@ class DialogMixin:
             if (d.get("hwnd"), d.get("title")) in recorded:
                 continue
             record_dialog({"event": "seen", "phase": phase, "title": d.get("title", ""),
-                                 "class": d.get("class", ""), "buttons": d.get("buttons") or [],
+                                 "class": d.get("class", ""), "buttons": _button_texts(d.get("buttons")),
                                  "text": [t[:200] for t in (d.get("text") or [])[:3]],
                                  "action": action})
 
@@ -201,7 +238,10 @@ class DialogMixin:
             cache.update((h, fresh[h]) for h in learned + due if h in fresh)
 
         def worth(w):
-            return w and (w.get("title") or w.get("buttons")) and not ui_windows.is_progress_box(w)
+            if not w or not (w.get("title") or w.get("buttons")):
+                return False
+            buttons = [b if isinstance(b, dict) else {"text": b} for b in w.get("buttons") or []]
+            return not ui_windows.is_progress_box(buttons, w.get("has_progress"))
         suspected = []
         for h in due:
             state["decided"].add(h)
@@ -212,7 +252,7 @@ class DialogMixin:
             # Not "seen": a suspect must not teach the fast path (dialog_history).
             record_dialog({"event": "suspected", "phase": "new_window",
                            "title": w.get("title", ""),
-                           "class": w.get("class", ""), "buttons": w.get("buttons") or [],
+                           "class": w.get("class", ""), "buttons": _button_texts(w.get("buttons")),
                            "text": [t[:200] for t in (w.get("text") or [])[:3]],
                            "action": label})
             suspected.append(w)

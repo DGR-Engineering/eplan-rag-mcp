@@ -45,8 +45,8 @@ def test_published_tools_mirror_the_header(tmp_path, monkeypatch):
     props = count.parameters["properties"]
     assert set(props) >= {"page", "limit", "project", "dry_run"}
     assert "limit" in count.parameters.get("required", [])
-    assert count.annotations is None                          # no @writes line: may write
-    assert app._tool_manager._tools["acme_fix_things"].annotations is None   # writes: no hint
+    assert count.annotations.readOnlyHint is False            # no @writes line: may write
+    assert app._tool_manager._tools["acme_fix_things"].annotations.readOnlyHint is False
 
 
 def test_read_only_needs_an_explicit_writes_false_and_no_unsafe(tmp_path, monkeypatch):
@@ -59,7 +59,8 @@ def test_read_only_needs_an_explicit_writes_false_and_no_unsafe(tmp_path, monkey
     script_tools.register(app, reg, "full", server.register_actions)
     tools = app._tool_manager._tools
     assert tools["acme_ro"].annotations.readOnlyHint is True
-    assert tools["acme_ro_unsafe"].annotations is None
+    unsafe = tools["acme_ro_unsafe"].annotations
+    assert unsafe.readOnlyHint is False and unsafe.destructiveHint is True
 
 
 def test_a_bad_script_is_skipped_not_fatal(tmp_path, monkeypatch, capsys):
@@ -178,7 +179,8 @@ def test_public_write_tools_default_to_dry_run_and_require_their_scope(monkeypat
         assert props["dry_run"].get("default") is writes, name
         assert required <= set(tool.parameters.get("required", [])), name
         if writes:
-            assert tool.annotations is None, name           # may write: never auto-approved
+            assert tool.annotations.readOnlyHint is False, name  # may write: never auto-approved
+            assert tool.meta["canary-ecad/eplan"]["changesProject"] is True, name
             assert "dry_run: True (default)" in tool.description
         else:
             assert tool.annotations.readOnlyHint is True, name

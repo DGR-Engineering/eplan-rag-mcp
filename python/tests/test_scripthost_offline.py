@@ -82,6 +82,29 @@ def out_path(out):
     return scripthost._jobs[out["run_id"]]["result_path"]
 
 
+@pytest.mark.parametrize("pinned, given, expected", [
+    ("C:/scratch/target.elk", None, "C:/scratch/target.elk"),    # no project: the target
+    ("C:/scratch/target.elk", "x.elk", "x.elk"),                  # an explicit project wins
+    ("", None, None),                                             # no target: host picks
+])
+def test_a_run_without_a_project_goes_to_the_target_project(host, monkeypatch, pinned, given, expected):
+    from api.actions import target
+    monkeypatch.setattr(target, "_target", pinned)
+    use(monkeypatch, FakeManager())
+    out = scripthost.script_run(code="return 1;", project=given)
+    req = json.load(open(os.path.join(os.path.dirname(out_path(out)), "request.json"), encoding="utf-8"))
+    assert req["project"] == expected
+
+
+def test_hello_names_the_target_project(host, monkeypatch):
+    from api.actions import target
+    use(monkeypatch, FakeManager())
+    monkeypatch.setattr(target, "_target", "C:/scratch/target.elk")
+    assert scripthost.script_hello("addin")["target_project"] == "C:/scratch/target.elk"
+    monkeypatch.setattr(target, "_target", "")
+    assert "target_project" not in scripthost.script_hello("addin")
+
+
 def test_a_script_that_refuses_is_not_a_success(host, monkeypatch):
     use(monkeypatch, FakeManager(addin=True, result={
         "protocol": 1, "ok": True, "phase": "done",

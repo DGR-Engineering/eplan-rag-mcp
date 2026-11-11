@@ -1,7 +1,9 @@
 """EPLANConnectionManager: the Remote Client connection, composed from the
 connection package's mixins."""
 
+import re
 import threading
+import time
 
 from connection.action_scaffold import ScaffoldMixin
 from connection.clr_bootstrap import ClrBootstrapMixin
@@ -40,6 +42,10 @@ class EPLANConnectionManager(ClrBootstrapMixin, RunnerMixin, DialogMixin,
         self.client = None
         self.connected = False
         self.pid = None         # EPLAN.exe behind the connection, when local
+        # The connected EPLAN's own version, as server enumeration reported it
+        # (e.g. "2027.0.3"). None when the port was given or enumeration was
+        # empty; target_version (the loaded DLLs) is the fallback then.
+        self.server_version = None
         self._inflight = None   # action string of a call still stuck in EPLAN
         self._inflight_since = 0.0
         self._not_responding_s = 0.0   # seen Not Responding during the last call
@@ -109,14 +115,16 @@ class EPLANConnectionManager(ClrBootstrapMixin, RunnerMixin, DialogMixin,
             # Auto-detect port(s) if not specified. Server enumeration first;
             # if it comes back empty (it is unreliable right after EPLAN
             # starts), fall back to EPLAN.exe's actual listening ports from
-            # netstat, then the historical default as a last resort. Each
-            # candidate is tried until one answers a Ping.
+            # Windows' TCP table, then the historical default as a last resort.
+            # Each candidate is tried until one answers a Ping.
+            server_version = None
             if port:
                 candidates = [str(port)]
             else:
                 servers = self.get_active_servers()
                 if servers:
                     candidates = [servers[-1]["port"]]
+                    server_version = servers[-1].get("version")
                     logger.info(f"Auto-detected port: {candidates[0]}")
                 else:
                     candidates = (eplan_listening_ports() if host in ("localhost", "127.0.0.1")
@@ -152,6 +160,7 @@ class EPLANConnectionManager(ClrBootstrapMixin, RunnerMixin, DialogMixin,
                         self.connected = True
                         self._inflight = None
                         self.pid = None
+                        self.server_version = server_version
                         if host in self.LOCAL_HOSTS:
                             try:
                                 from process_control import _listener_pid
@@ -194,8 +203,26 @@ class EPLANConnectionManager(ClrBootstrapMixin, RunnerMixin, DialogMixin,
         if not self.connected or not self.client:
             return {"alive": False, "message": "Not connected"}
 
-        alive, timed_out, error = call_with_timeout(self.client.Ping, timeout_seconds)
+        # A call still stuck in EPLAN: answer from Windows instead of adding a
+        # Ping thread that would only queue behind it. A stuck Ping counts too.
+        if self._inflight:
+            busy = self._busy_failure("Ping")
+            busy.pop("action", None)
+            return dict(busy, alive=False)
+
+        client = self.client
+
+        def ping():
+            try:
+                return client.Ping()
+            finally:
+                if self.client is client and self._inflight == "Ping":
+                    self._inflight = None
+
+        alive, timed_out, error = call_with_timeout(ping, timeout_seconds)
         if timed_out:
+            if not self._inflight:
+                self._inflight, self._inflight_since = "Ping", time.monotonic()
             # Not marked disconnected: the client may still be valid and EPLAN
             # merely busy (a modal dialog, a long redraw). Saying so is more
             # useful than guessing either way.
@@ -225,10 +252,26 @@ class EPLANConnectionManager(ClrBootstrapMixin, RunnerMixin, DialogMixin,
         if error is not None:
             self.connected = False
             return {"alive": False, "message": f"Ping failed: {error}"}
+        # A killed EPLAN answers Ping with a plain False, not an error.
+        if not alive and self.pid and self.host in self.LOCAL_HOSTS and pid_alive(self.pid) is False:
+            self.connected = False
+            return {"alive": False, "process_alive": False,
+                    "message": f"EPLAN (pid {self.pid}) is no longer running",
+                    "next_step": "EPLAN is no longer running: call eplan_app_launch."}
         return {
             "alive": bool(alive),
             "message": "EPLAN responding" if alive else "No response"
         }
+
+    def eplan_major(self):
+        """Major version of the EPLAN this server talks to (2027, 2026, 2 for
+        2.9), or None when it cannot be told. The connected EPLAN's own
+        version when known, else the loaded DLLs' version."""
+        for raw in (self.server_version, self.target_version):
+            m = re.match(r"\s*(\d+)", str(raw or ""))
+            if m:
+                return int(m.group(1))
+        return None
 
     def disconnect(self) -> dict:
         """Disconnect from EPLAN."""
@@ -251,6 +294,7 @@ class EPLANConnectionManager(ClrBootstrapMixin, RunnerMixin, DialogMixin,
             self.client = None
             self.connected = False
             self.pid = None
+            self.server_version = None
             self._inflight = None
 
     def get_status(self) -> dict:
@@ -267,6 +311,7 @@ class EPLANConnectionManager(ClrBootstrapMixin, RunnerMixin, DialogMixin,
             "connected": self.connected,
             "api_loaded": self._clr_initialized,
             "target_version": self.target_version,
+            "server_version": self.server_version if self.connected else None,
             "host": self.host if self.connected else None,
             "is_local": (self.host in self.LOCAL_HOSTS) if self.connected else None,
             "port": self.port if self.connected else None,

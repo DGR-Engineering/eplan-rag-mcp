@@ -390,8 +390,8 @@ def _nodes(app):
 def test_strip_removes_every_title_and_null_default(server, monkeypatch):
     monkeypatch.delenv("EPLAN_MCP_KEEP_SCHEMA_TITLES", raising=False)
     nodes = _nodes(server.build_app("full")[0])
-    # A schema title is a string; a dict under "title" is a parameter named
-    # `title` inside a properties map (eplan_click_dialog_button has one).
+    # A schema title is a string; a dict under "title" would be a parameter
+    # named `title` inside a properties map, which must survive.
     assert not [n for n in nodes if isinstance(n.get("title"), str)],         "a schema title survived"
     assert not [n for n in nodes if "default" in n and n["default"] is None],         "a null default survived"
 

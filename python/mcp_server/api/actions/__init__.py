@@ -206,6 +206,27 @@ from .partsmanagement import (
     partsmanagement_export_all,
 )
 
+# Data Portal (integrated in EPLAN)
+from .dataportal import (
+    dataportal_add_to_download_list,
+    dataportal_search_count,
+)
+
+# Target project + batched page operations
+from .target import live_set_target_project
+from .ops import (
+    live_batch,
+    live_find_placements,
+    live_place_device,
+    live_insert_macro,
+    live_place_panel_item,
+    live_place_plc_point,
+    live_place_terminal,
+    live_update_placement,
+    live_render_page,
+    live_check_page,
+)
+
 # PLC
 from .plc import (
     plc_export,
@@ -350,9 +371,40 @@ from .introspect import (
 )
 
 # Live DataModel (read/edit the project open in EPLAN, via runtime reflection)
+from .panel_live import (
+    live_panel_captions,
+    live_set_panel_captions,
+)
+
+from .structure_live import (
+    live_copy_pages_to_structure,
+)
+
+from .reports_live import (
+    live_report_types,
+    live_create_report,
+)
+
+from .terminals_live import (
+    live_terminal_strips,
+    live_set_terminal_strip_definition,
+)
+
+from .cables_live import (
+    live_cables,
+    live_place_cable_definition,
+    live_assign_cable_connections,
+)
+
+from .project_live import (
+    live_project_templates,
+    live_create_project,
+)
+
 from .live import (
     live_query_functions,
     live_query_pages,
+    live_plc_io_list,
     live_set_function_text,
     live_set_connection_designations,
     live_read_check_messages,
@@ -374,6 +426,14 @@ from .objects import (
 from .graphics import (
     live_scale_text,
     live_set_layer,
+)
+
+# Built on API members new in EPLAN 2027 (reached by reflection, so older
+# versions get a clear "new in 2027" error instead of a compile timeout).
+from .v2027 import (
+    live_read_terminal_jumpers,
+    parts_db_export_edz,
+    remove_unused_user_properties,
 )
 
 # Schematic authoring - the WRITE side of the live object model: create pages,
@@ -523,6 +583,13 @@ __all__ = [
     # Parts management API
     'partsmanagement_export', 'partsmanagement_import',
     'partsmanagement_export_by_properties', 'partsmanagement_export_all',
+    # Data Portal
+    'dataportal_add_to_download_list', 'dataportal_search_count',
+    # Target project + batched page operations
+    'live_set_target_project',
+    'live_batch', 'live_find_placements', 'live_place_device', 'live_insert_macro',
+    'live_place_panel_item', 'live_place_plc_point', 'live_place_terminal',
+    'live_update_placement', 'live_render_page', 'live_check_page',
     # PLC
     'plc_export', 'plc_import',
     # Workspace
@@ -570,7 +637,13 @@ __all__ = [
     # API introspection
     'api_types', 'api_describe',
     # Live DataModel
-    'live_query_functions', 'live_query_pages', 'live_set_function_text',
+    'live_report_types', 'live_create_report',
+    'live_copy_pages_to_structure',
+    'live_panel_captions', 'live_set_panel_captions',
+    'live_terminal_strips', 'live_set_terminal_strip_definition',
+    'live_cables', 'live_place_cable_definition', 'live_assign_cable_connections',
+    'live_project_templates', 'live_create_project',
+    'live_query_functions', 'live_query_pages', 'live_plc_io_list', 'live_set_function_text',
     'live_set_connection_designations', 'live_read_check_messages',
     'live_objects_read', 'live_objects_edit',
     'pdf_inspect', 'dwg_inspect', 'verify_actions',
@@ -583,6 +656,9 @@ __all__ = [
     'live_place_corner', 'live_place_tnode', 'live_place_connected',
     'profile_learn', 'profile_list', 'profile_get', 'profile_suggest',
     'profile_forget',
+    # New in EPLAN 2027
+    'live_read_terminal_jumpers', 'parts_db_export_edz',
+    'remove_unused_user_properties',
     # GED interaction
     'start_ged_interaction', 'insert_device', 'insert_symbol_reference',
     'select_device',

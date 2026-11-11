@@ -42,6 +42,7 @@ import urllib.request
 import uuid
 import zipfile
 
+from . import target
 from ._base import _get_connected_manager
 
 PROTOCOL = 1
@@ -659,6 +660,13 @@ def script_hello(runtime: str = "auto") -> dict:
         runtime: "auto" (add-in if it answers, else bootstrap), "addin", "bootstrap" or
             "offline".
     """
+    if target.get():
+        # The project a run without `project` will act on.
+        return dict(_hello_runtime(runtime), target_project=target.get())
+    return _hello_runtime(runtime)
+
+
+def _hello_runtime(runtime: str) -> dict:
     global _addin_ok
     if runtime == "offline":
         try:
@@ -713,7 +721,9 @@ def script_run(code: str = None, script: str = None, args: dict = None, project:
         script: A library script name (see script_list) or the path of a .cs file inside a
             script library folder.
         args: Arguments for the script (ctx.Args).
-        project: .elk path or project name to act on; default the focused or only open project.
+        project: .elk path or project name to act on. Default: the target project
+            (live_set_target_project / EPLAN_MCP_PROJECT) when one is set, else the focused or
+            only open project.
         runtime: "auto", "addin", "bootstrap", or "offline" (EPLAN's offline API in a separate
             process: no window and no interactive session needed; project must be a closed
             .elk path; scripts must declare '@needs offline' or '@needs either').
@@ -729,6 +739,8 @@ def script_run(code: str = None, script: str = None, args: dict = None, project:
     """
     if bool(code) == bool(script):
         return {"success": False, "error": "Give exactly one of code or script."}
+    # The pinned target project, so the user clicking another project cannot redirect a run.
+    project = project or target.get() or None
     try:
         script_path, source = (None, code) if code else _resolve_script(script)
     except (FileNotFoundError, ValueError) as e:

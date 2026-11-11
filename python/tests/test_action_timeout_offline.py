@@ -70,6 +70,8 @@ def test_blocked_call_times_out_with_a_typed_failure(mgr):
     assert result["timed_out"] is True and result["success"] is False
     assert result["message"] == result["error"]
     assert "EPLAN_MCP_ACTION_TIMEOUT" in result["next_step"]
+    # Still running inside EPLAN: the caller learns what holds it.
+    assert result["in_flight_action"] == "XPrjActionProjectOpen /Project:x"
     assert mgr.connected is True
 
 
@@ -143,6 +145,23 @@ def test_exception_with_eplan_gone_is_not_running(mgr, monkeypatch):
     assert mgr.connected is False
 
 
+def test_clean_return_with_eplan_gone_is_not_running(mgr, monkeypatch):
+    # Measured on EPLAN 2027: a killed EPLAN lets ExecuteAction return without raising.
+    mgr.client.release.set()
+    monkeypatch.setattr(eplan_connection, "pid_alive", lambda pid: False)
+    result = mgr.execute_action("someAction")
+    assert result["errorType"] == "EplanNotRunning" and "did not complete" in result["error"]
+    assert mgr.connected is False
+
+
+def test_ping_false_with_eplan_gone_says_not_running(mgr, monkeypatch):
+    mgr.client.Ping = lambda: False
+    monkeypatch.setattr(eplan_connection, "pid_alive", lambda pid: False)
+    result = mgr.ping()
+    assert result["alive"] is False and result["process_alive"] is False
+    assert "eplan_app_launch" in result["next_step"] and mgr.connected is False
+
+
 def test_exception_with_eplan_alive_keeps_the_old_handler(mgr):
     mgr.client.fail = RuntimeError("boom")
     result = mgr.execute_action("someAction")
@@ -211,16 +230,32 @@ def test_hanging_connect_ping_is_bounded(monkeypatch):
     assert m.connected is False and disposed
 
 
-def test_ping_timeout_reports_dialog_and_in_flight_action(mgr, monkeypatch):
+def test_ping_behind_a_stuck_call_answers_from_windows(mgr, monkeypatch):
     monkeypatch.setattr(eplan_connection, "_blocking_dialogs", lambda pids, windows=None: [DIALOG])
-    mgr.client.Ping = lambda: mgr.client.release.wait(10)
-    mgr._inflight = "slowAction"
+    mgr.client.Ping = lambda: pytest.fail("no Ping thread behind a stuck call")
+    mgr._inflight, mgr._inflight_since = "slowAction", time.monotonic()
     result = mgr.ping(timeout_seconds=0.1)
-    assert result["timed_out"] is True
-    assert result["process_alive"] is True
+    assert result["alive"] is False and result["errorType"] == "EplanBusy"
     assert result["dialogs"] == [DIALOG]
     assert result["in_flight_action"] == "slowAction"
     assert "eplan_click_dialog_button" in result["next_step"]
+
+
+def test_a_stuck_ping_makes_the_next_one_busy(mgr, monkeypatch):
+    monkeypatch.setattr(eplan_connection, "_blocking_dialogs", lambda pids, windows=None: [DIALOG])
+    calls = []
+    mgr.client.Ping = lambda: calls.append(1) or mgr.client.release.wait(10)
+    first = mgr.ping(timeout_seconds=0.1)
+    assert first["timed_out"] is True and first["process_alive"] is True
+    assert first["dialogs"] == [DIALOG]
+    second = mgr.ping(timeout_seconds=0.1)
+    assert second["errorType"] == "EplanBusy" and second["in_flight_action"] == "Ping"
+    assert len(calls) == 1
+    mgr.client.release.set()
+    deadline = time.monotonic() + 2
+    while mgr._inflight and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert mgr._inflight is None, "the leaked Ping clears its marker when it returns"
 
 
 def test_call_with_timeout_abort_check_returns_its_value():
@@ -308,3 +343,32 @@ def test_wrapped_tools_run_off_the_event_loop():
         return await tool()
     out = asyncio.run(run())
     assert str(loop_thread[0]) not in out
+
+
+@pytest.mark.parametrize("raw, expected", [(None, 600.0), ("", 600.0), ("90", 90.0),
+                                          ("abc", 600.0), ("-5", 600.0), ("0", 600.0)])
+def test_action_timeout_env_is_read_per_call_and_a_bad_value_is_ignored(monkeypatch, raw, expected):
+    if raw is None:
+        monkeypatch.delenv("EPLAN_MCP_ACTION_TIMEOUT", raising=False)
+    else:
+        monkeypatch.setenv("EPLAN_MCP_ACTION_TIMEOUT", raw)
+    assert eplan_connection.action_timeout_s() == expected
+
+
+def test_typed_failures_include_eplan_not_running():
+    assert set(eplan_connection.TYPED_FAILURES) == {
+        "EplanBlockedByDialog", "EplanActionTimeout", "EplanBusy", "EplanNotRunning"}
+
+
+def test_next_step_picks_a_safe_button_in_any_language(tmp_path, monkeypatch):
+    monkeypatch.setenv("EPLAN_MCP_LOG_DIR", str(tmp_path))
+    d = {"hwnd": 5, "title": "Stammdaten", "suggested_button": "Nein",
+         "buttons": [{"text": "Ja", "id": 6, "safe": False},
+                     {"text": "Nein", "id": 7, "safe": True}]}
+    step = EPLANConnectionManager._dialog_next_step(d)
+    assert "button='Nein'" in step and "window_title='Stammdaten'" in step
+
+
+def test_a_window_hint_wins_over_the_button_advice(monkeypatch):
+    monkeypatch.setitem(eplan_connection.WINDOW_HINTS, (5, "Data Portal"), "Ask the user.")
+    assert EPLANConnectionManager._dialog_next_step({"hwnd": 5, "title": "Data Portal"}) == "Ask the user."

@@ -43,7 +43,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(eplan_connection, "pid_alive", lambda pid: pid == 99)
     state = {"windows": []}
     monkeypatch.setattr(eplan_connection, "_eplan_windows",
-                        lambda pids, full=False: list(state["windows"]))
+                        lambda pids, full=False, new_since=None: list(state["windows"]))
     monkeypatch.setattr(eplan_connection, "_eplan_hwnds",
                         lambda pids: {w["hwnd"] for w in state["windows"]})
     m = EPLANConnectionManager()

@@ -104,14 +104,14 @@ def _page(placements, name="&ADD#BC01/1", page_type="Circuit", grid=1.27):
 FUSE = {
     "clrType": "Function", "name": "+1162-FU1",
     "location": {"x": 60.0, "y": 200.0},
-    "symbol": {"library": "Symbol Library - East River", "name": "F1",
+    "symbol": {"library": "Symbol Library - <client>", "name": "F1",
                "variantNr": 3},
 }
 
 
 def test_a_tagged_function_teaches_symbol_and_tag_keyed_by_kind():
     obs = P._observe_page(_page([FUSE]))
-    assert obs["symbols"]["FU"][0]["library"] == "Symbol Library - East River"
+    assert obs["symbols"]["FU"][0]["library"] == "Symbol Library - <client>"
     assert "FU" in obs["tags"]
     assert "any" in obs["tags"], "an overall tag shape is useful too"
 
