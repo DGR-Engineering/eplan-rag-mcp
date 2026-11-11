@@ -203,9 +203,75 @@ def _bootstrap_script(run_folder: str, mode: str, request_path: str, result_path
     return path
 
 
+# The offline host (dotnet/src/EplanMcp.Host.Offline): EPLAN's offline API in its own long-lived
+# process, fed through a queue folder. No interactive EPLAN connection is needed for it.
+OFFLINE_DIR = os.environ.get("EPLAN_MCP_OFFLINE_DIR") or os.path.join(DOTNET_DIR, "artifacts", "offline")
+OFFLINE_QUEUE = os.environ.get("EPLAN_MCP_OFFLINE_QUEUE") or os.path.join(
+    os.path.expanduser("~"), ".eplan-mcp", "offline-queue")
+_OFFLINE_STATUS_FRESH_S = 15
+
+
+def _offline_status():
+    path = os.path.join(OFFLINE_QUEUE, "status.json")
+    if os.path.isfile(path) and time.time() - os.path.getmtime(path) < _OFFLINE_STATUS_FRESH_S:
+        return _read_json(path)
+    return None
+
+
+def _offline_ensure(start_timeout: float = 180.0) -> dict:
+    """The running offline host's status, starting it when needed."""
+    status = _offline_status()
+    if status:
+        return status
+    exe = os.path.join(OFFLINE_DIR, "EplanMcp.Host.Offline.exe")
+    if not os.path.isfile(exe):
+        raise FileNotFoundError(f"Offline host not built: {exe}. Build dotnet/src/EplanMcp.Host.Offline (Release).")
+    os.makedirs(OFFLINE_QUEUE, exist_ok=True)
+    stop = os.path.join(OFFLINE_QUEUE, "stop")
+    if os.path.exists(stop):
+        os.remove(stop)
+    import subprocess
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    subprocess.Popen([exe, "--queue", OFFLINE_QUEUE], cwd=OFFLINE_DIR, creationflags=flags,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    deadline = time.time() + start_timeout
+    while time.time() < deadline:
+        status = _offline_status()
+        if status:
+            return status
+        time.sleep(1)
+    raise TimeoutError("The offline host did not start within %d s (EPLAN license? check the EPLAN logs)."
+                       % start_timeout)
+
+
+def _invoke_offline(run_id: str, request_path: str, result_path: str, timeout: float) -> dict:
+    _offline_ensure()
+    _write_json(os.path.join(OFFLINE_QUEUE, run_id + ".json"), {"request": request_path, "result": result_path})
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if os.path.isfile(result_path):
+            return {"success": True}
+        time.sleep(0.25)
+    return {"success": False, "message": "The offline host did not answer in time."}
+
+
+def script_offline_stop() -> dict:
+    """
+    Stop the offline script host (it otherwise exits after 30 idle minutes). It closes EPLAN's
+    offline API cleanly on its own main thread.
+    """
+    if not _offline_status():
+        return {"success": True, "note": "The offline host is not running."}
+    with open(os.path.join(OFFLINE_QUEUE, "stop"), "w", encoding="utf-8") as f:
+        f.write("stop")
+    return {"success": True, "note": "Stop requested; the host exits after its current run."}
+
+
 def _invoke(runtime: str, mode: str, run_folder: str, request_path: str, result_path: str,
             timeout: float) -> dict:
     """Start one host call. Blocks until EPLAN returns from the action."""
+    if runtime == "offline":
+        return _invoke_offline(os.path.basename(run_folder), request_path, result_path, timeout)
     manager, error = _get_connected_manager()
     if error:
         return error
@@ -247,7 +313,7 @@ def _hello(runtime: str, timeout: float = 30.0) -> dict:
 
 def _pick_runtime(runtime: str) -> str:
     global _addin_ok, _addin_checked
-    if runtime in ("addin", "bootstrap"):
+    if runtime in ("addin", "bootstrap", "offline"):
         return runtime
     if _addin_ok is None or (not _addin_ok and time.time() - _addin_checked > _ADDIN_RECHECK_S):
         hello = _hello("addin", timeout=20.0)
@@ -265,6 +331,13 @@ def script_hello(runtime: str = "auto") -> dict:
         runtime: "auto" (add-in if it answers, else bootstrap), "addin" or "bootstrap".
     """
     global _addin_ok
+    if runtime == "offline":
+        try:
+            status = dict(_offline_ensure())
+        except (FileNotFoundError, TimeoutError) as e:
+            return {"success": False, "runtime": "offline", "error": str(e)}
+        status["success"] = status.get("protocol") == PROTOCOL
+        return status
     if runtime == "auto":
         hello = _hello("addin", timeout=20.0)
         _addin_ok = bool(hello.get("success")) and hello.get("protocol") == PROTOCOL
@@ -305,7 +378,9 @@ def script_run(code: str = None, script: str = None, args: dict = None, project:
         script: A library script name (see script_list) or a .cs path.
         args: Arguments for the script (ctx.Args).
         project: .elk path or project name to act on; default the focused or only open project.
-        runtime: "auto", "addin" or "bootstrap".
+        runtime: "auto", "addin", "bootstrap", or "offline" (EPLAN's offline API in a separate
+            process: no window and no interactive session needed; project must be a closed
+            .elk path; scripts must declare '@needs offline' or '@needs either').
         compile_only: Compile and check only. Also returns confirm_code for real-project writes.
         dry_run: Sets ctx.DryRun; the script should report changes instead of making them.
         budget_seconds: Time limit enforced at each ctx.Budget.Check().

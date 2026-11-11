@@ -187,3 +187,60 @@ def test_scratch_clone_gets_a_marker_naming_itself(tmp_path, monkeypatch):
     gone = fixtures.scratch_project_discard(out["project"], close_first=False)
     assert gone["success"] is True
     assert not os.path.exists(out["project"] + fixtures.SCRATCH_MARKER_SUFFIX)
+
+
+def _fake_offline_host(queue, stop_event):
+    """Plays EplanMcp.Host.Offline: keeps status.json fresh and answers queued requests."""
+    import threading
+    import time as _t
+
+    def loop():
+        while not stop_event.is_set():
+            json.dump({"protocol": 1, "core_version": "0.1.0", "runtime": "offline"},
+                      open(os.path.join(queue, "status.json"), "w", encoding="utf-8"))
+            for f in os.listdir(queue):
+                if f.endswith(".json") and f != "status.json":
+                    job = json.load(open(os.path.join(queue, f), encoding="utf-8"))
+                    req = json.load(open(job["request"], encoding="utf-8"))
+                    json.dump({"protocol": 1, "ok": True, "phase": "done", "runtime": "offline",
+                               "run_id": req["run_id"], "result": req["project"]},
+                              open(job["result"], "w", encoding="utf-8"))
+                    os.remove(os.path.join(queue, f))
+            _t.sleep(0.05)
+
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+    return t
+
+
+def test_offline_runtime_queues_and_needs_no_eplan_connection(host, monkeypatch, tmp_path):
+    import threading
+    queue = tmp_path / "queue"
+    queue.mkdir()
+    monkeypatch.setattr(scripthost, "OFFLINE_QUEUE", str(queue))
+    monkeypatch.setattr(scripthost, "_get_connected_manager",
+                        lambda: (None, {"success": False, "message": "Not connected"}))
+    stop = threading.Event()
+    _fake_offline_host(str(queue), stop)
+    try:
+        assert scripthost.script_hello(runtime="offline")["success"] is True
+        out = scripthost.script_run(code="// @needs offline\nreturn 1;", runtime="offline", project="C:/x/a.elk")
+        assert out["success"] is True and out["runtime"] == "offline" and out["result"] == "C:/x/a.elk"
+    finally:
+        stop.set()
+
+
+def test_offline_host_missing_is_reported_plainly(host, monkeypatch, tmp_path):
+    monkeypatch.setattr(scripthost, "OFFLINE_QUEUE", str(tmp_path / "q"))
+    monkeypatch.setattr(scripthost, "OFFLINE_DIR", str(tmp_path / "nothing"))
+    out = scripthost.script_hello(runtime="offline")
+    assert out["success"] is False and "not built" in out["error"]
+
+
+def test_offline_stop_writes_the_stop_file(host, monkeypatch, tmp_path):
+    queue = tmp_path / "queue"
+    queue.mkdir()
+    monkeypatch.setattr(scripthost, "OFFLINE_QUEUE", str(queue))
+    json.dump({"protocol": 1}, open(queue / "status.json", "w"))
+    assert scripthost.script_offline_stop()["success"] is True
+    assert (queue / "stop").exists()

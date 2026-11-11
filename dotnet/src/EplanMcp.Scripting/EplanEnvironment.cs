@@ -71,33 +71,7 @@ namespace EplanMcp.Scripting
                 if (_project == null && resolveError != null) pre.Warnings.Add(resolveError);
                 pre.Project = _project?.ProjectLinkFilePath;
 
-                // D7: ad-hoc code may write when the TARGET project is a marked scratch clone. The
-                // safety check keeps a writing script on ctx.Project (no ProjectManager, no
-                // selection), and Verify refuses a run that changed which projects are open. A real
-                // project takes a saved script, the explicit flag, and a confirmation equal to the
-                // approval hash (source + helpers + args) the user was shown.
-                string scratchWhy = "";
-                bool targetIsScratch = _project != null && ScratchMarker.IsScratch(_project.ProjectLinkFilePath, out scratchWhy);
-                if (targetIsScratch)
-                {
-                    pre.WriteAllowed = true;
-                    pre.Gate = "the target project is a scratch clone";
-                }
-                else if (_req.AllowRealProject && !string.IsNullOrEmpty(_req.ScriptPath)
-                         && !string.IsNullOrEmpty(_req.Confirm) && sourceHash.StartsWith(_req.Confirm!, StringComparison.OrdinalIgnoreCase)
-                         && _req.Confirm!.Length >= 12)
-                {
-                    pre.WriteAllowed = true;
-                    pre.Gate = "saved script confirmed for a real project";
-                }
-                else
-                {
-                    pre.WriteAllowed = false;
-                    pre.Gate = _project == null
-                        ? "no target project"
-                        : "the target project " + Path.GetFileName(_project.ProjectLinkFilePath) + " is not a scratch clone (" + scratchWhy +
-                          "). Writes to a real project need a saved script, allow_real_project and the confirmation code.";
-                }
+                WriteGate.Decide(pre, _project?.ProjectLinkFilePath, _req, sourceHash);
                 return pre;
             }
 
