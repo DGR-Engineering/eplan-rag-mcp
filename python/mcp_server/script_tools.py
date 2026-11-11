@@ -13,6 +13,11 @@ Header -> tool:
     // @arg    name type [optional|required] [default=x] description
     // @writes true|false    only an explicit `false` (and no @unsafe) gives the tool readOnlyHint
 
+A tool that may write (no `@writes false`) defaults to dry_run=True, like the other writing tools:
+the first call shows what would change and changes nothing. A published script tool has no
+allow_real_project, so it writes only to scratch clones (eplan_scratch_project_create);
+eplan_script_run keeps dry_run=False as its default and is the path for real-project writes.
+
 The run parameters project, dry_run, budget_seconds and wait_seconds are reserved; a script that
 declares an @arg with one of those names is skipped (with a message on stderr), as is one whose
 header cannot be read or turned into a tool. One bad script never stops the server.
@@ -67,7 +72,9 @@ def make_tool(path: str, header: dict):
         default = inspect.Parameter.empty if a["required"] else a["default"]
         params.append(inspect.Parameter(a["name"], inspect.Parameter.KEYWORD_ONLY,
                                         default=default, annotation=py_type if a["required"] else py_type | None))
-    for name, typ, default in (("project", str | None, None), ("dry_run", bool, False),
+    # Read-only only on an explicit `@writes false`: a missing header line means "may write".
+    read_only = header.get("writes") is False and "unsafe" not in header
+    for name, typ, default in (("project", str | None, None), ("dry_run", bool, not read_only),
                                ("budget_seconds", float, 120.0), ("wait_seconds", float, 60.0)):
         params.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, default=default, annotation=typ))
     arg_names = [a["name"] for a in args]
@@ -75,7 +82,7 @@ def make_tool(path: str, header: dict):
     def tool(**kwargs) -> dict:
         script_args = {k: kwargs[k] for k in arg_names if kwargs.get(k) is not None}
         return scripthost.script_run(script=path, args=script_args, project=kwargs.get("project"),
-                                     dry_run=kwargs.get("dry_run", False),
+                                     dry_run=kwargs.get("dry_run", not read_only),
                                      budget_seconds=kwargs.get("budget_seconds", 120.0),
                                      wait_seconds=kwargs.get("wait_seconds", 60.0))
 
@@ -87,11 +94,12 @@ def make_tool(path: str, header: dict):
         lines += [f"    {a['name']}: {a['desc']}" + (f" One of: {', '.join(a['choices'])}." if a.get("choices") else "")
                   for a in args]
     lines.append("    project: .elk path or project name; default the focused or only open project.")
+    if not read_only:
+        lines.append("    dry_run: True (default) shows what would change and changes nothing; pass False to apply."
+                     " Writes reach only scratch clones (eplan_scratch_project_create).")
     lines.append(f"\nScript: {path}")
     tool.__doc__ = "\n".join(lines)
     tool.__name__ = header.get("tool") or "script"
-    # Read-only only on an explicit `@writes false`: a missing header line means "may write".
-    read_only = header.get("writes") is False and "unsafe" not in header
     tool.__mcp_annotations__ = {"readOnlyHint": True} if read_only else {}
     return tool
 

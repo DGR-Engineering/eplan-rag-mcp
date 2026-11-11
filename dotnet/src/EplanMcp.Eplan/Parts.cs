@@ -77,14 +77,13 @@ namespace EplanMcp.Eplan
         /// parts never removes anything. Parts live on the main function, so a match on an
         /// auxiliary is redirected to the device's single main; with <paramref name="promoteMain"/>,
         /// a function the snapshot recorded as main, whose device tag now has no main at all, is
-        /// made main again. A fixed device is never changed. In a dry run nothing is written and
-        /// the counts say what would change. Returns the summary; the per-row outcomes are in
-        /// "rows".
+        /// made main again. A fixed device is never changed. With <paramref name="dryRun"/> nothing
+        /// is written and the counts say what would change. Returns the summary; the per-row
+        /// outcomes are in "rows".
         /// </summary>
         public static Dictionary<string, object?> Restore(ScriptContext ctx, Project project,
-            List<Dictionary<string, object?>> snapshot, string? pagePrefix, bool promoteMain)
+            List<Dictionary<string, object?>> snapshot, string? pagePrefix, bool promoteMain, bool dryRun)
         {
-            bool dryRun = ctx.DryRun;
             string prefix = pagePrefix ?? "";
             var byFull = new Dictionary<string, List<Function>>(StringComparer.Ordinal);
             var byLoose = new Dictionary<string, List<Function>>(StringComparer.Ordinal);

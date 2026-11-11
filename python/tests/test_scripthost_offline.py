@@ -82,6 +82,18 @@ def out_path(out):
     return scripthost._jobs[out["run_id"]]["result_path"]
 
 
+def test_a_script_that_refuses_is_not_a_success(host, monkeypatch):
+    use(monkeypatch, FakeManager(addin=True, result={
+        "protocol": 1, "ok": True, "phase": "done",
+        "result": {"matched": 9, "error": "9 lines and arcs match, more than limit=5. Nothing was written."}}))
+    out = scripthost.script_run(code="return 1;")
+    assert out["success"] is False and out["state"] == "done"
+    assert "more than limit" in out["error"]
+    use(monkeypatch, FakeManager(addin=True, result={
+        "protocol": 1, "ok": True, "phase": "done", "result": {"error": None, "changed": 2}}))
+    assert scripthost.script_run(code="return 1;")["success"] is True
+
+
 def test_falls_back_to_bootstrap_when_addin_missing(host, monkeypatch):
     m = use(monkeypatch, FakeManager(addin=False))
     out = scripthost.script_run(code="return 1;")

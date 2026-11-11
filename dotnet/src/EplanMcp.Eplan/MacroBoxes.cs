@@ -126,13 +126,14 @@ namespace EplanMcp.Eplan
         /// Re-creates the boxes the project is missing from survey rows. A box is identified by
         /// (page, macro, variant, rectangle rounded to 0.01 mm): one page can hold several boxes of
         /// the same macro and variant. An existing box is re-styled (flags, drawing order,
-        /// appearance) when <paramref name="updateExisting"/>, never duplicated. In a dry run nothing
-        /// is written; "would_create" counts what a real run creates.
+        /// appearance) when <paramref name="updateExisting"/>, never duplicated. With
+        /// <paramref name="dryRun"/> nothing is written; "would_create" and "would_restyle" count what
+        /// a real run changes. "rows" holds one outcome per survey row (page, macro, variant, action,
+        /// error).
         /// </summary>
         public static Dictionary<string, object?> Restore(ScriptContext ctx, Project project,
-            List<Dictionary<string, object?>> wanted, bool updateExisting)
+            List<Dictionary<string, object?>> wanted, bool updateExisting, bool dryRun)
         {
-            bool dryRun = ctx.DryRun;
             // Pages by full Name and by IdentifyingName; a name two pages share is ambiguous.
             var pages = Pages.All(project);
             var pageIndex = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
@@ -163,6 +164,8 @@ namespace EplanMcp.Eplan
             int created = 0, alreadyThere = 0, noPage = 0, ambiguous = 0, failed = 0, restyled = 0, partial = 0;
             var problems = new List<object>();
             var plan = new List<object>();
+            var outcomes = new List<Dictionary<string, object?>>();
+            int wouldRestyle = 0;
 
             foreach (var row in wanted)
             {
@@ -170,11 +173,14 @@ namespace EplanMcp.Eplan
                 string pageName = PlainJson.Str(row, "page"), macro = PlainJson.Str(row, "macro");
                 int variant = (int)PlainJson.Num(row, "variant");
                 Area(row, out double ax1, out double ay1, out double ax2, out double ay2);
+                var outcome = new Dictionary<string, object?> { ["page"] = pageName, ["macro"] = macro, ["variant"] = variant };
+                outcomes.Add(outcome);
 
                 int pageNo = FindPage(pageIndex, pageName, PlainJson.Str(row, "page_identifying_name"), out var pageError);
                 if (pageNo < 0)
                 {
                     if (pageError == null) noPage++; else ambiguous++;
+                    outcome["action"] = pageError == null ? "page_not_found" : "page_ambiguous";
                     problems.Add(Problem(macro, pageName, pageError ?? "the project has no page with this name"));
                     continue;
                 }
@@ -184,7 +190,9 @@ namespace EplanMcp.Eplan
                 if (present.Contains(key))
                 {
                     alreadyThere++;
-                    if (!updateExisting || dryRun || !boxByKey.TryGetValue(key, out var existing)) continue;
+                    outcome["action"] = "present";
+                    if (!updateExisting || !boxByKey.TryGetValue(key, out var existing)) continue;
+                    if (dryRun) { wouldRestyle++; outcome["action"] = "would_restyle"; continue; }
                     var errors = new List<string>();
                     try
                     {
@@ -192,12 +200,15 @@ namespace EplanMcp.Eplan
                         SetEnums(existing, row, errors);
                         Try(errors, "drawing_order", () => existing.DrawingOrder = (short)PlainJson.Num(row, "drawing_order"));
                         ApplyAppearance(existing, row, errors);
+                        outcome["action"] = errors.Count == 0 ? "restyled" : "partly_restyled";
                         if (errors.Count == 0) restyled++;
-                        else { partial++; problems.Add(Problem(macro, pageName, "restyled, but these settings failed: " + string.Join(" | ", errors))); }
+                        else { partial++; outcome["error"] = string.Join(" | ", errors); problems.Add(Problem(macro, pageName, "restyled, but these settings failed: " + string.Join(" | ", errors))); }
                     }
                     catch (Exception ex)
                     {
                         failed++;
+                        outcome["action"] = "failed";
+                        outcome["error"] = "restyling: " + Safe.Error(ex);
                         problems.Add(Problem(macro, pageName, "restyling: " + Safe.Error(ex)));
                     }
                     continue;
@@ -205,7 +216,7 @@ namespace EplanMcp.Eplan
 
                 plan.Add(new Dictionary<string, object?> { ["page"] = pageName, ["macro"] = macro, ["variant"] = variant, ["x1"] = ax1, ["y1"] = ay1, ["x2"] = ax2, ["y2"] = ay2 });
                 // Reserve the key in a dry run too, so would_create equals what a real run creates.
-                if (dryRun) { present.Add(key); continue; }
+                if (dryRun) { present.Add(key); outcome["action"] = "would_create"; continue; }
 
                 var fieldErrors = new List<string>();
                 try
@@ -234,12 +245,20 @@ namespace EplanMcp.Eplan
                     SetEnums(box, row, fieldErrors);
                     Try(fieldErrors, "drawing_order", () => box.DrawingOrder = (short)PlainJson.Num(row, "drawing_order"));
                     ApplyAppearance(box, row, fieldErrors);
+                    // Read back the identity: a box that does not carry its macro is not restored.
+                    if (!string.Equals(Safe.Text(() => box.MacroName) ?? "", macro, StringComparison.OrdinalIgnoreCase))
+                        fieldErrors.Add("macro: read back '" + Safe.Text(() => box.MacroName) + "'");
+                    if (Safe.Get(() => box.Variant, -1) != variant) fieldErrors.Add("variant: read back " + Safe.Get(() => box.Variant, -1));
+                    outcome["action"] = fieldErrors.Count == 0 ? "created" : "partly_created";
+                    if (fieldErrors.Count > 0) outcome["error"] = string.Join(" | ", fieldErrors);
                     if (fieldErrors.Count == 0) created++;
                     else { partial++; problems.Add(Problem(macro, pageName, "created, but these settings failed: " + string.Join(" | ", fieldErrors))); }
                 }
                 catch (Exception ex)
                 {
                     failed++;
+                    outcome["action"] = "failed";
+                    outcome["error"] = Safe.Error(ex);
                     problems.Add(Problem(macro, pageName, Safe.Error(ex)));
                 }
             }
@@ -253,6 +272,7 @@ namespace EplanMcp.Eplan
                 ["restyled"] = restyled,
                 ["update_existing"] = updateExisting,
                 ["would_create"] = plan.Count,
+                ["would_restyle"] = wouldRestyle,
                 ["created"] = created,
                 ["partly_applied"] = partial,
                 ["page_not_found"] = noPage,
@@ -261,6 +281,7 @@ namespace EplanMcp.Eplan
                 ["problems"] = problems.Take(40).ToList(),
                 ["plan"] = plan.Take(60).ToList(),
                 ["ok"] = failed == 0 && noPage == 0 && ambiguous == 0 && partial == 0,
+                ["rows"] = outcomes,
             };
         }
 

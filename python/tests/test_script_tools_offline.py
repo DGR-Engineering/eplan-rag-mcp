@@ -129,3 +129,77 @@ def test_run_file_reader_rejects_path_tricks(tmp_path, monkeypatch):
         except ValueError:
             continue
         raise AssertionError("accepted " + bad)
+
+
+# The public library's own tools: names, guards in the schema, dry-run default and hints.
+PUBLIC_TOOLS = {
+    # name: (writes, required args)
+    "text_placements": (False, {"page"}),
+    "text_set_height": (True, {"page", "handle"}),
+    "text_set_box": (True, {"page", "handle"}),
+    "text_create": (True, {"page", "text", "x", "y"}),
+    "line_styles": (False, {"page"}),
+    "line_styles_set": (True, {"page", "x0", "y0", "x1", "y1", "limit"}),
+    "function_move": (True, {"page", "moves"}),
+    "function_remove": (True, {"page", "names", "symbol_prefix"}),
+    "macrobox_snapshot": (False, set()),
+    "macrobox_restore": (True, {"snapshot", "limit"}),
+    "parts_snapshot": (False, set()),
+    "parts_restore": (True, {"snapshot", "limit"}),
+}
+
+
+def _public_tools(monkeypatch):
+    monkeypatch.setattr(scripthost, "_extra_script_dirs", {})
+    monkeypatch.setattr(scripthost, "_dir_prefix", {})
+    monkeypatch.setenv("EPLAN_MCP_EXTENSIONS", "")
+    monkeypatch.setenv("EPLAN_MCP_SCRIPT_TOOLS", "publish")
+    app, reg = FastMCP("t"), ToolRegistry()
+    names = script_tools.register(app, reg, "full", server.register_actions)
+    return app, names
+
+
+def test_every_public_library_tool_is_published(monkeypatch):
+    app, names = _public_tools(monkeypatch)
+    tools = app._tool_manager._tools
+    for name in PUBLIC_TOOLS:
+        assert "eplan_" + name in names, name           # never silently skipped or shadowed
+    for old in ("textfit_snapshot", "textfit_set_height", "textfit_set_box", "graphic_pens",
+                "macrobox_survey"):
+        assert "eplan_" + old not in tools
+
+
+def test_public_write_tools_default_to_dry_run_and_require_their_scope(monkeypatch):
+    app, _ = _public_tools(monkeypatch)
+    tools = app._tool_manager._tools
+    for name, (writes, required) in PUBLIC_TOOLS.items():
+        tool = tools["eplan_" + name]
+        props = tool.parameters["properties"]
+        assert props["dry_run"].get("default") is writes, name
+        assert required <= set(tool.parameters.get("required", [])), name
+        if writes:
+            assert tool.annotations is None, name           # may write: never auto-approved
+            assert "dry_run: True (default)" in tool.description
+        else:
+            assert tool.annotations.readOnlyHint is True, name
+
+
+def test_public_write_tool_sends_dry_run_unless_told_otherwise(monkeypatch):
+    app, _ = _public_tools(monkeypatch)
+    seen = []
+    monkeypatch.setattr(scripthost, "script_run", lambda **kw: seen.append(kw) or {"ok": True})
+    asyncio.run(app.call_tool("eplan_function_remove", {"page": "1", "names": ["A"], "symbol_prefix": "X"}))
+    asyncio.run(app.call_tool("eplan_function_remove", {"page": "1", "names": ["A"], "symbol_prefix": "X",
+                                                        "dry_run": False}))
+    asyncio.run(app.call_tool("eplan_text_placements", {"page": "1"}))
+    assert [kw["dry_run"] for kw in seen] == [True, False, False]
+
+
+def test_public_descriptions_are_written_for_any_user():
+    public = os.path.normcase(os.path.join(scripthost.DOTNET_DIR, "scripts"))
+    for _prefix, path, header in script_tools.library():
+        if os.path.normcase(os.path.dirname(path)) != public:
+            continue
+        text = (header.get("desc") or "").lower()
+        for word in ("measure", "probe", "to see how", "textfit", "#19017"):
+            assert word not in text, (path, word)

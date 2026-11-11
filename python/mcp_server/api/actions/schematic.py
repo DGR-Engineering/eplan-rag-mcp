@@ -1400,6 +1400,11 @@ def live_remove_placement(page: str, handle: str = None,
     different page cannot be removed through this call - the page argument is a
     structural guard, not a hint.
 
+    One placement of any type, by handle. To remove several functions by name
+    (with a symbol-prefix guard that never removes a main function), use the
+    library script function_remove instead (eplan_function_remove, or
+    eplan_script_run(script="function_remove")).
+
     Args:
         page: Page name.
         handle: Handle of the placement to remove. Required unless

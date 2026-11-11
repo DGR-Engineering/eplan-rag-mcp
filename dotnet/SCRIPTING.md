@@ -63,9 +63,11 @@ automatically; a full class adds `using EplanMcp.Eplan;`. The scripts in `dotnet
 | `Describe` | Plain dictionaries for a `Placement`, `Text`, `Function`, `FunctionFull`, `Storable`, `Page`; `Handle` (the id `Edit.SelectObjects` takes) |
 | `Parts` | `Row`, `Read`, `Snapshot`, `Restore` of article references |
 | `MacroBoxes` | `Describe`, `Survey`, `Restore`, `Links`, `PrepareInspect` |
-| `TextFit` | `Snapshot`, `ResolvePlacement`, `SetHeight`, `SetBox` for text size and alignment boxes |
+| `TextPlacements` | `List` the texts on a page with handles, `Resolve` a handle, `SetHeight`, `SetBox` (checked, read back) |
+| `Lines` | `InArea` (lines and arcs inside an area of a page), `Describe` (pen and layer) |
+| `Guards` | `OverLimit` for bulk writes, `SnapshotEnvelope` / `CheckSnapshot` for snapshot files |
 | `Selection`, `Layers`, `SymbolLibraries` | Read the selection, the layer table, a symbol library |
-| `PlainJson` | JSON files and record arguments as plain data (`Parse`, `Rows`, `RowsFromArgs`, `RequireRows`, `Write`, `OutPath`) |
+| `PlainJson` | JSON files and record arguments as plain data (`Parse`, `Rows`, `RowsFromArgs`, `RequireRows`, `ReadSnapshot`, `Write`, `OutPath`) |
 | `Safe` | Guarded reads (`Text`, `Get`, `Maybe`, `Field`), `PlainText`, `Error`, `RequireWrite` |
 
 Property reads are where EPLAN surprises most: reading a property the object does not carry
@@ -140,3 +142,33 @@ The safety check is a guard against mistakes, not a sandbox: a script is C# runn
 `eplan_mcp.ext.register_script_dir(path, helpers=[...], prefix="acme_")`; the helper `.cs` files
 are compiled into every script from that folder. Set `EPLAN_MCP_SCRIPT_TOOLS=publish` to also
 publish each library script as its own MCP tool.
+
+A published script tool that may write defaults to `dry_run=True`, has no `allow_real_project`
+(so it writes only to scratch clones), and is never marked read-only. Library scripts that write
+follow the same rules as the other writing tools:
+
+- **Address objects so the address survives between calls.** Use the handle the live tools use
+  (`ToStringIdentifier()`), resolved on the named page only, and fail with "re-read" when it no
+  longer resolves. Never a position in a list.
+- **Bulk writes need an explicit scope and a `limit`** (a required argument): refuse when nothing
+  matches or more than `limit` matches, and write nothing in that case (`Guards.OverLimit`).
+- **Read every write back** and report what did not stick (`not_stuck`).
+- **Refuse by returning `{"error": "..."}`** (or by throwing). A run whose returned object has a
+  non-empty top-level `error` reports `success: false`, so a refusal never reads as done.
+- **Snapshots are envelopes** (`Guards.SnapshotEnvelope`: kind, schema, project, rows). A restore
+  reads them with `PlainJson.ReadSnapshot`, which refuses another kind, an unknown schema, a bare
+  array, or another project unless `allow_other_project=true`, and writes one outcome per row to a
+  file.
+
+The public library's object tools:
+
+| Tool | What it does |
+|---|---|
+| `text_placements` | Lists a page's texts (symbol property texts and free texts) with size, font size, box settings and a handle |
+| `text_set_height`, `text_set_box` | Set the height or the alignment-box settings of one text, by handle |
+| `text_create` | Places a free text and reads it back; returns its handle and the undo call |
+| `line_styles`, `line_styles_set` | Read, or set within an area and a limit, the line style, factor and width of lines and arcs |
+| `function_move` | Moves functions on a page by handle or exact name |
+| `function_remove` | Removes functions on a page by exact name, guarded by a symbol prefix; never a main function, never every function on the page (`eplan_live_remove_placement` removes one placement of any type by handle) |
+| `macrobox_snapshot`, `macrobox_restore` | Save every macro box to a file; re-create the missing ones |
+| `parts_snapshot`, `parts_restore` | Save every function's parts to a file; put them back |

@@ -46,7 +46,12 @@ It exposes **253 tools** (full tool-by-tool reference: [the project wiki](https:
   `eplan_script_offline_stop`, `eplan_script_host_install`): typed C#
   run inside EPLAN with no rebuild and no restart. See "Escape hatches" below;
   prefer them to `eplan_execute_custom_script` for anything that reads or writes
-  the data model.
+  the data model. The script library also ships ready-made object tools (texts,
+  line styles, functions, macro boxes, parts snapshots): run them with
+  `eplan_script_run(script="<name>")`, or set `EPLAN_MCP_SCRIPT_TOOLS=publish` to
+  get each as its own `eplan_<name>` tool. Those that write default to
+  `dry_run=True`, write only to scratch clones, take handles from their read
+  tool, and need a `limit` for bulk changes (see dotnet/SCRIPTING.md).
 - **8 connection/utility tools**: `eplan_versions`, `eplan_servers`,
   `eplan_connect`, `eplan_status`, `eplan_ping`, `eplan_test`,
   `eplan_disconnect`, `eplan_list_extensions`.

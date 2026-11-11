@@ -880,7 +880,13 @@ def script_status(run_id: str) -> dict:
                 "error": ("The host wrote no result. EPLAN may have reported success for a script it "
                           "never ran, the add-in may be missing, or EPLAN crashed. Check "
                           "eplan_get_system_messages and the audit log under %LOCALAPPDATA%\\EplanMcp\\audit.")}
-    result["success"] = bool(result.get("ok"))
+    # A script that refuses (over limit, stale handle, wrong snapshot) returns {"error": ...} and
+    # writes nothing: the run worked, but the call did not do what was asked, so it is no success.
+    value = result.get("result")
+    refused = value.get("error") if isinstance(value, dict) else None
+    result["success"] = bool(result.get("ok")) and not refused
+    if refused and not result.get("error"):
+        result["error"] = refused
     result["state"] = "done"
     return result
 

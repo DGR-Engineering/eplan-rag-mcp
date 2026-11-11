@@ -114,14 +114,13 @@ Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Windows.For
   numeric AutomationIds, no Button/Edit/CheckBox control types, no real
   AutomationIds, no ValuePattern, no TogglePattern and no grid at all.
 
-  Measured on the spike app 2026-08-20:
+  On a plain WinForms test dialog:
       without RegisterClientSideProviders :  6 descendants, all ControlType.Pane
       with    RegisterClientSideProviders : 32 descendants, Edit/Button/CheckBox/
                                             Text/Table with real AutomationIds
 
-  This is almost certainly why the earlier probe concluded "EPLAN's ribbon
-  exposes 0 buttons" - an unregistered client under-reports EVERY Win32/WinForms
-  surface. Never remove this, and never trust a UIA dump taken without it.
+  An unregistered client under-reports EVERY Win32/WinForms surface (EPLAN's
+  ribbon then seems to expose no buttons at all). Never remove this, and never trust a UIA dump taken without it.
 
   ORDERING TRAP: RegisterClientSideProviders throws
       NullReferenceException at MS.Internal.Automation.ProxyManager.LoadDefaultProxies()
@@ -277,8 +276,8 @@ function Resolve-WindowSpec {
     # number, not only as the {hwnd/title_regex/...} object this used to assume. It did not, and a
     # string has none of those properties, so EVERY filter below was skipped and the function
     # returned the first top-level window on the desktop -- an unrelated ThumbnailDeviceHelperWnd,
-    # whatever you asked for. Measured 2026-09-26: `dump` was unusable for this reason, while
-    # `wait_window` worked because title_regex is its own parameter. Normalise first.
+    # whatever you asked for: `dump` was unusable that way, while `wait_window` worked because
+    # title_regex is its own parameter. Normalise first.
     if ($Spec -is [string] -or $Spec -is [int] -or $Spec -is [int64] -or $Spec -is [double]) {
         $text = [string]$Spec
         if ($text -match '^\s*\d+\s*$') {
@@ -388,7 +387,7 @@ function Get-ElementValue {
 }
 
 <#
-  NOTE ON LABEL TEXT (measured, not assumed)
+  NOTE ON LABEL TEXT
 
   A WinForms Label exposes its caption as the UIA *Name*, not through any
   value pattern - and only while the control has no AccessibleName overriding
@@ -398,8 +397,8 @@ function Get-ElementValue {
   'text' so a caller never has to know which kind of control it hit.
 
   LegacyIAccessiblePattern is deliberately NOT used: the managed
-  System.Windows.Automation client does not surface it (verified against the
-  spike app - it returns null every time), so anything relying on it would be
+  System.Windows.Automation client does not surface it (on a plain WinForms
+  dialog it returns null every time), so anything relying on it would be
   a field that is always empty.
 #>
 
@@ -902,7 +901,7 @@ function Invoke-Drive(`$op, `$obj) {
 while ((Get-Date) -lt `$deadline -and -not (Test-Path '$stop')) {
     # ONE window snapshot per cycle, rules applied to it in order. A per-rule list_windows let
     # a window that appeared between two rules' calls skip the earlier (claim) rule and be
-    # clicked by a later one (measured 2026-10-10).
+    # clicked by a later one.
     `$snap = @{}
     foreach (`$r in @(`$rules)) {
         `$rproc = if (`$r.PSObject.Properties['process'] -and `$r.process) { `$r.process } else { 'EPLAN' }
