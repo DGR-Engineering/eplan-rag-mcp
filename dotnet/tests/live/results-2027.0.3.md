@@ -99,7 +99,7 @@ or a function-location read), not only by the tool's own report.
 | `macrobox_snapshot` | Pass | - | 621 boxes on 75 pages, about 1.6 s | - |
 | `macrobox_restore` | **Fixed**, then pass | `would_create` 2 | after deleting 2 boxes: `created` 2, `ok` true; a new snapshot equals the original field by field; a re-run creates nothing | missing limit; over limit (limit 1 for 2); bare-array file; other project; missing file. With `allow_other_project` the other-project file is accepted. |
 | `parts_snapshot` | Pass | - | 8,687 functions, 1,022 with parts, about 4.2 s | - |
-| `parts_restore` | Pass | `would_change` 2 | after clearing the parts of 2 main functions: `changed` 2, read back; a new snapshot equals the original except the 2 functions `function_remove` deleted | same as `macrobox_restore` |
+| `parts_restore` | Pass (write path; coverage limited, see below) | `would_change` 2 | after clearing the parts of 2 main functions: `changed` 2, read back; a new snapshot equals the original except the 2 functions `function_remove` deleted | same as `macrobox_restore` |
 
 Both restores ran project-wide well inside the 120 s budget: `macrobox_restore` 0.4-2.5 s,
 `parts_restore` 4.6-6.6 s. The limit check runs a full dry pass first, so a refused call costs
@@ -163,6 +163,16 @@ required"). A `ui_dismiss_watch_start` / `ui_dismiss_watch_stop` pair started, s
   bare-array or other-project snapshot, unknown page) come back as an exception (`phase: run`,
   with a stack trace) instead of a result `error`. They are still `success: false`, and nothing is
   written.
+- **`parts_restore` finds only about a third of the snapshot on its own source project.** Of
+  1,022 rows with parts, 327 matched a function (325 unchanged, 2 restored). 502 were ambiguous:
+  several functions share page, device tag, symbol, category and connection points, and none or
+  several of them are main. 298 of those are unplaced functions, where the page is empty, so every
+  unplaced function with the same device tag collides. 195 matched an auxiliary function whose
+  device has no single main function (mostly terminal symbols; 30 unplaced), and are skipped
+  without `promote_main`. The matcher does search unplaced functions too. The tool refuses rather
+  than guesses, so nothing wrong was written, but a restore after a large loss would put back only
+  the uniquely identifiable functions. The test deleted parts from two such functions, so it proves
+  the write path, not the coverage.
 - When a restore has nothing to do, a real call reports `dry_run: true`, because it returns its
   planning pass.
 - A read-only snapshot refuses an `out` path outside its run folder. Use the default and copy the
