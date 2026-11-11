@@ -48,7 +48,7 @@ PROTOCOL = 1
 
 # The host version this server is written against (<Version> in dotnet/Directory.Build.props).
 # A host reporting another version still runs; script_hello adds a warning.
-HOST_VERSION = "0.2.0"
+HOST_VERSION = "0.2.1"
 
 # Out-of-band human switch for real-project writes: set for the server process by a person (MCP
 # config or shell), never by a tool call. Read at call time.

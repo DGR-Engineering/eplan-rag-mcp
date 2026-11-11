@@ -11,7 +11,7 @@
 
     <!-- Semver of the script host core. Bump with every change to the request/result contract or
          ScriptContext; the Python server reads it back through EplanMcp_Hello. -->
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
 
     <EplanVersion Condition="'$(EplanVersion)' == ''">2027.0.3</EplanVersion>
     <EplanBinPath Condition="'$(EplanBinPath)' == ''">$(ProgramW6432)\EPLAN\Platform\$(EplanVersion)\Bin</EplanBinPath>

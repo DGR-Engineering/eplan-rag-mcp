@@ -1,6 +1,7 @@
 // @tool     parts_snapshot
 // @desc     Saves the parts (article references) of every function in the project, placed or not, to a snapshot file that parts_restore can put back.
 // @schema   1
+// @requires core>=0.2.1
 // @arg      page_prefix  string  optional   Only functions on pages whose name starts with this
 // @arg      out          string  optional   Snapshot file to write (default parts_snapshot.json in the run folder)
 // @writes   false
