@@ -15,7 +15,7 @@ target was a scratch clone of a production-size schematic project, opened alone.
 | Compile error | Pass. `CS1061` on the author's line 2, hint "Did you mean: ProjectName, ProjectType". |
 | Read-only write | Pass. `SmartLock` in a script without `@writes true` rejected at compile time (`EMCP002`). |
 | Unload | Mostly pass. 20 consecutive runs (half of them using the DataModel) unloaded, with flat private memory (about 1.66 GB) and a flat count of loaded script assemblies. The FIRST run on each new server connection, and the class-file scripts run in one earlier batch, stayed loaded: one small assembly each, no visible memory growth. Cause not found yet; EPLAN's own `AssemblyLoadContext.AssemblyLoad` subscribers (API module, license handler, script log, WPF) are the suspects. |
-| Add-in runtime | **Not run.** Registering the add-in is a persistent EPLAN configuration change and needs its own go-ahead. |
+| Add-in runtime | Pass, same day. `EplApiModuleActionNet /register:` on a copy outside the build folder made `EplanMcp_RunScript` and `EplanMcp_Hello` resolvable at once, with NO EPLAN restart (first registration). Every check above passed through the add-in too (identity: one data-model copy, host in the Default context; lock taken; budget stop; hints; read-only rejection), with the same unload pattern. `/unregister:` removed both actions again. |
 
 ## Gotcha found: action file paths under `AppData`
 
