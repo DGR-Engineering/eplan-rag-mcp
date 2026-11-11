@@ -118,10 +118,13 @@ def test_discovery_mode_hides_a_known_wrapper(discovery_app):
 def test_discovery_indexes_everything_full_mode_publishes(full_app, discovery_app):
     _, full_registry = full_app
     _, disc_registry = discovery_app
-    # Same tools indexed either way, plus the three discovery-only meta-tools.
+    # Same tools indexed either way, plus the three discovery-only meta-tools and the library
+    # scripts (searchable only in discovery mode unless EPLAN_MCP_SCRIPT_TOOLS=publish).
+    import script_tools
+    scripts = {prefix + header["tool"] for prefix, _, header in script_tools.library()}
     assert set(full_registry.names()) <= set(disc_registry.names())
     extra = set(disc_registry.names()) - set(full_registry.names())
-    assert extra == {"eplan_tools_search", "eplan_tools_describe", "eplan_tools_call"}
+    assert extra == {"eplan_tools_search", "eplan_tools_describe", "eplan_tools_call"} | scripts
 
 
 # ------------------------------------------------------------- the size claim
