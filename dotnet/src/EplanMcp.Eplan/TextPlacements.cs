@@ -107,8 +107,9 @@ namespace EplanMcp.Eplan
                     d["property_index"] = Safe.Maybe(() => (int)pp.DisplayedProperty.Index);
                     d["display_string"] = Safe.Text(() => pp.GetDisplayString());
                     // The PropertyPlacement overload with true returns coordinates relative to the
-                    // placement; false returns page coordinates. Empty text throws.
-                    AddBox(d, "bounds", () => pp.GetBoundingBox(false));
+                    // placement; false returns page coordinates. An empty value has no extent.
+                    if (string.IsNullOrEmpty(d["display_string"] as string)) { d["bounds"] = null; d["bounds_reason"] = "the text shows an empty value, so it has no extent"; }
+                    else AddBox(d, "bounds", () => pp.GetBoundingBox(false));
                     texts.Add(d);
                 }
             }
@@ -161,7 +162,7 @@ namespace EplanMcp.Eplan
             error = null;
             if (string.IsNullOrWhiteSpace(handle)) { error = "handle is required (from text_placements)."; return null; }
             string pageName = Safe.Text(() => page.Name) ?? "?";
-            string again = " Re-read the page with text_placements: handles change when the project is reopened or the symbol's texts change.";
+            string again = " The object no longer exists, or the symbol's texts changed; re-read the page with text_placements.";
             var placements = Pages.Placements(page);
             int hash = handle!.LastIndexOf('#');
             if (hash < 0)
@@ -202,6 +203,24 @@ namespace EplanMcp.Eplan
         }
 
         /// <summary>
+        /// Null unless the text is a property text shown from its symbol VARIANT (not local) and
+        /// <paramref name="target"/> is "height": EPLAN keeps that placement in the variant and refuses
+        /// the TextBase.Height setter ("The database is write-protected"); the API offers no way to set
+        /// a variant placement's height, only to make one instance local
+        /// (SymbolReference.SwitchLocalPropertyPlacements), which is a different change.
+        /// </summary>
+        public static string? SharedHeightRefusal(SymbolReference? owner, string target)
+        {
+            if (owner == null || target != "height") return null;
+            bool local = Safe.Maybe(() => owner.UseLocalPropertyPlacements) ?? true;
+            return local ? null :
+                "EPLAN does not allow changing the height of a property text that the symbol shows from its variant " +
+                "(shared_placements=true): the variant's placements are write-protected, so nothing was written. Use " +
+                "text_set_box (its box settings reach the variant), or make this symbol's property placements local in " +
+                "EPLAN first (only this instance changes), then set the height.";
+        }
+
+        /// <summary>
         /// Writes a height to the text (<paramref name="target"/> "height": TextBase.Height;
         /// "font_size": the font size property), either <paramref name="height"/> or the current
         /// height times <paramref name="factor"/>, and reads both back. A dry run returns the plan.
@@ -215,7 +234,7 @@ namespace EplanMcp.Eplan
             if (height.HasValue && !(height.Value > 0) && Math.Abs(height.Value - FromLayer) > 0.0001)
                 return Fail(data, $"height must be greater than 0 mm, or {FromLayer} for 'from layer'.");
             if (target != "height" && target != "font_size") return Fail(data, "target must be 'height' or 'font_size'.");
-            var refusal = SharedRefusal(owner, allowShared);
+            var refusal = SharedRefusal(owner, allowShared) ?? SharedHeightRefusal(owner, target);
             if (refusal != null) return Fail(data, refusal);
 
             double? before = Safe.Maybe(() => text.Height);
@@ -230,8 +249,12 @@ namespace EplanMcp.Eplan
             if (ctx.DryRun) return data;
 
             ctx.Lock(text);
-            if (target == "font_size") text.Properties[(AnyPropertyId)FontSizeProperty] = wanted;
-            else text.Height = wanted;
+            try
+            {
+                if (target == "font_size") text.Properties[(AnyPropertyId)FontSizeProperty] = wanted;
+                else text.Height = wanted;
+            }
+            catch (Exception ex) { return Fail(data, $"EPLAN refused the {target} write: {Safe.Error(ex)}"); }
             data["written"] = true;
 
             double? after = Safe.Maybe(() => text.Height);
