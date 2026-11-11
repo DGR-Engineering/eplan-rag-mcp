@@ -43,6 +43,10 @@ Starte danach EPLAN, öffne Claude Code und sage `connect to eplan`. Die vollst�
 
 ![Konfigurierte Claude CLI](image.png)
 
+**Script host:** typed C# inside EPLAN, in three runtimes (add-in, bootstrap, offline). Guide in English: [`dotnet/SCRIPTING.md`](dotnet/SCRIPTING.md).
+
+![Script host architecture](docs/images/script-host-architecture.svg)
+
 #### Voraussetzung
 
 Vor dem Verbindungsaufbau muss Remoting in EPLAN aktiviert sein: **Allow remote access via Remote Client** unter **File → Settings… → Workstation → Interfaces → Remote access** einschalten.

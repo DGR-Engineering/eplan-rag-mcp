@@ -17,6 +17,13 @@ EPLAN's process** under `QuietMode` (`QuietModes.ShowNoDialogs`). Completely
 silent, prevents blocking dialogs, and reads return values back from the
 `ActionCallingContext` — safe for batch / headless automation.
 
+**Script host.** For typed C# against the DataModel, use the `eplan_script_*` tools
+(`eplan_script_hello`, `eplan_script_run`, `eplan_script_list`, ...) and the library scripts in
+`dotnet/scripts/`. `eplan_script_host_install` installs the host release (SHA-256 checked) under
+`~/.eplan-mcp/host/<version>`; `EPLAN_MCP_RELEASE_URL` points it at a fork or mirror. Guide:
+[`dotnet/SCRIPTING.md`](../../dotnet/SCRIPTING.md); overview in the
+[main README](../../README.md#script-host).
+
 ---
 
 ## Architecture

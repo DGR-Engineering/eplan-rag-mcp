@@ -43,6 +43,10 @@ claude mcp list   # "eplan"이 표시되어야 함
 
 ![설정된 Claude CLI](image.png)
 
+**Script host:** typed C# inside EPLAN, in three runtimes (add-in, bootstrap, offline). Guide in English: [`dotnet/SCRIPTING.md`](dotnet/SCRIPTING.md).
+
+![Script host architecture](docs/images/script-host-architecture.svg)
+
 #### 사전 요구 사항
 
 서버를 연결하기 전에 EPLAN의 **File → Settings… → Workstation → Interfaces → Remote access**에서 **Allow remote access via Remote Client**를 켜야 합니다.
