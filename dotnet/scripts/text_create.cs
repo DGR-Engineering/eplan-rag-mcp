@@ -2,7 +2,7 @@
 // @desc     Places a free text on a page at a position and height, then reads its text, position and height back. Returns the new text's handle and how to undo it. Dry run by default.
 // @schema   1
 // @arg      page    string  required   Page Name or IdentifyingName (exact)
-// @arg      text    string  required   The text; a "\n" in it starts a new line
+// @arg      text    string  required   The text, not empty or only spaces; a "\n" in it starts a new line
 // @arg      x       number  required   Page x in mm
 // @arg      y       number  required   Page y in mm
 // @arg      height  number  optional   Text height in mm (default 2.5, > 0)
@@ -27,6 +27,7 @@ public static class Script
         var project = ctx.RequireProject();
         var page = Pages.Require(project, ctx.Args.Require("page"));
         string text = ctx.Args.Require("text");
+        if (string.IsNullOrWhiteSpace(text)) return new { error = "text is empty or only whitespace; nothing to place." };
         double x = ctx.Args.Number("x"), y = ctx.Args.Number("y"), height = ctx.Args.Number("height", 2.5);
         if (!(height > 0)) return new { error = "height must be greater than 0 mm." };
         bool debug = ctx.Args.Bool("debug");

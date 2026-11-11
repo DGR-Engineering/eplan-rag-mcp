@@ -188,16 +188,21 @@ follow the same rules as the other writing tools:
 
 - **Address objects so the address survives between calls.** Use the handle the live tools use
   (`ToStringIdentifier()`), resolved on the named page only, and fail with "re-read" when it no
-  longer resolves. Never a position in a list.
+  longer resolves. Never a position in a list. Handles survive an EPLAN restart and a reopen of
+  the project; one stops resolving when its object was deleted.
 - **Bulk writes need an explicit scope and a `limit`** (a required argument): refuse when nothing
   matches or more than `limit` matches, and write nothing in that case (`Guards.OverLimit`).
 - **Read every write back** and report what did not stick (`not_stuck`).
-- **Refuse by returning `{"error": "..."}`** (or by throwing). A run whose returned object has a
-  non-empty top-level `error` reports `success: false`, so a refusal never reads as done.
+- **Refuse by returning `{"error": "..."}`**, or by throwing `ScriptRefusedException`
+  (`EplanMcp.Scripting.Core`): the host turns it into the same `{"error": "..."}` result, without
+  a stack trace. `ctx.Args.Require`, `ctx.RequireProject`, `Pages.Require`, `PlainJson`'s row and
+  snapshot readers and the `out` path check all refuse this way. A run whose returned object has a
+  non-empty top-level `error` reports `success: false`, so a refusal never reads as done. Refuse
+  only before the first write; any other exception is a failed run (`phase: run`, with a stack).
 - **Snapshots are envelopes** (`Guards.SnapshotEnvelope`: kind, schema, project, rows). A restore
   reads them with `PlainJson.ReadSnapshot`, which refuses another kind, an unknown schema, a bare
   array, or another project unless `allow_other_project=true`, and writes one outcome per row to a
-  file.
+  file. A real call with nothing to do reports `dry_run: false`.
 
 ## Library tools
 
@@ -222,17 +227,17 @@ the bootstrap, `either` also offline, `gui` needs the interactive EPLAN window.
 | `macro_prepare_inspect` | What "Prepare macros" left on each macro box | R | `pages` required | session |
 | `read_selection` | Editor and page-navigator selection | R | | gui |
 | `text_placements` | A page's texts with height, font size, box settings and a handle | R | `page` required | session |
-| `line_styles` | Lines and arcs on a page or in an area, with style, factor, width | R | `limit` (default 200) | session |
+| `line_styles` | Lines and arcs on a page or in an area, with style, factor, width | R | all four of `x0`..`y1` or none (a partial area is refused); `limit` (default 200) | session |
 | `macrobox_snapshot` | Every macro box to a snapshot file | R (file) | | session |
-| `parts_snapshot` | Every function's parts to a snapshot file | R (file) | `page_prefix` | session |
-| `text_set_height` | Height of one text: absolute or a factor | W | `handle` from `text_placements`; `allow_shared` | session |
+| `parts_snapshot` | Every function's parts to a snapshot file (schema 2: with object `id`, `full_dt`, `definition`, `variant`) | R (file) | `page_prefix` | session |
+| `text_set_height` | Height of one text: absolute or a factor | W | `handle` from `text_placements`; the height of a variant (shared) property text is refused; `allow_shared` for its font size | session |
 | `text_set_box` | Alignment-box settings of one text | W | `handle`; only settings passed are written | session |
-| `text_create` | Places a free text, reads it back, returns handle and undo call | W | `page`, `text`, `x`, `y` required | session |
+| `text_create` | Places a free text, reads it back, returns handle and undo call | W | `page`, `text` (not blank), `x`, `y` required | session |
 | `line_styles_set` | Style, factor or width of every line and arc in an area | W | area and `limit` required | session |
 | `function_move` | Moves functions to page coordinates | W | handle or exact name; one match each | session |
 | `function_remove` | Removes functions by exact name | W | `symbol_prefix`; never a main function or the whole page | session |
 | `macrobox_restore` | Re-creates missing macro boxes from a snapshot | W | `limit` required; snapshot must match the project | session |
-| `parts_restore` | Puts snapshot parts back on functions | W | `limit` required; snapshot must match the project | session |
+| `parts_restore` | Puts snapshot parts back on functions: by object id (same project), else by key; ties listed with candidates | W | `limit` required; snapshot must match the project | session |
 | `set_selection` | Selects pages in the navigator, reads the selection back | W (selection) | `@unsafe` | gui |
 
 `eplan_live_remove_placement` removes one placement of any type by handle.

@@ -203,3 +203,14 @@ def test_public_descriptions_are_written_for_any_user():
         text = (header.get("desc") or "").lower()
         for word in ("measure", "probe", "to see how", "textfit", "#19017"):
             assert word not in text, (path, word)
+
+
+def test_public_tools_state_their_refusal_rules(monkeypatch):
+    """The rules a caller cannot guess reach the tool description: a partial area is refused, a
+    variant text's height is refused, parts go back by id, and empty text is not placed."""
+    app, _ = _public_tools(monkeypatch)
+    tools = app._tool_manager._tools
+    assert "all four of x0, y0, x1, y1" in tools["eplan_line_styles"].description
+    assert "always refused" in tools["eplan_text_set_height"].description
+    assert "by object id" in tools["eplan_parts_restore"].description
+    assert "not empty" in tools["eplan_text_create"].description

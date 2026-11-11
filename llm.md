@@ -55,17 +55,24 @@ It exposes **253 tools** (full tool-by-tool reference: [the project wiki](https:
   `eplan_script_run` itself defaults to `dry_run=False`: pass `dry_run=True` to preview.
   Library scripts (name: args; `*` = required):
   - Texts: `text_placements` (page*, symbol_prefix, include_free_texts),
-    `text_set_height` (page*, handle*, height | factor, target=height|font_size, allow_shared),
+    `text_set_height` (page*, handle*, height | factor, target=height|font_size, allow_shared;
+    the height of a property text shown from its symbol variant is always refused, use
+    `text_set_box` or make the placements local in EPLAN),
     `text_set_box` (page*, handle*, has_box, box_fixed_width, box_fixed_height,
     fitting_permitted, never_hyphenate, remove_breaks, box_width, box_height, allow_shared),
-    `text_create` (page*, text*, x*, y*, height, debug).
-  - Lines: `line_styles` (page*, x0, y0, x1, y1, limit),
+    `text_create` (page*, text* not blank, x*, y*, height, debug).
+  - Lines: `line_styles` (page*, x0, y0, x1, y1: all four or none, limit),
     `line_styles_set` (page*, x0*, y0*, x1*, y1*, limit*, style, factor, width).
   - Functions: `function_move` (page*, moves*: [{handle | name, x, y}]),
     `function_remove` (page*, names*, symbol_prefix*).
   - Snapshots: `macrobox_snapshot` (out), `macrobox_restore` (snapshot*, limit*,
     update_existing, allow_other_project, out), `parts_snapshot` (page_prefix, out),
-    `parts_restore` (snapshot*, limit*, page_prefix, promote_main, allow_other_project, out).
+    `parts_restore` (snapshot*, limit*, page_prefix, promote_main, allow_other_project, out;
+    matches by object id when the snapshot is from the same project, else by page, full device
+    tag, function definition, symbol and connection points; ties are refused and listed with their
+    candidates in the out file).
+  - Expected refusals (missing argument, unknown page, wrong snapshot) come back as
+    `success: false` with a plain `error`, never a stack trace.
   - Read inspectors: `project_info` (also offline), `page_inspect` (page, max, include),
     `page_property` (page*, ids, names, index), `function_inspect` (page, device_tag, max,
     with_id), `function_dump` (dt*, page, max, fields), `unplaced_functions` (symbol_prefix*,
