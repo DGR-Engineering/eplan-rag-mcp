@@ -51,8 +51,10 @@ HOST_DIR = os.environ.get("EPLAN_MCP_HOST_DIR") or os.path.join(DOTNET_DIR, "art
 RUNS_DIR = os.environ.get("EPLAN_MCP_RUNS_DIR") or os.path.join(os.path.expanduser("~"), ".eplan-mcp", "runs")
 
 # Script libraries: the public one here, plus any folders an extension adds (folder -> helper
-# .cs files compiled into every script from that folder).
+# .cs files compiled into every script from that folder), and each folder's tool-name prefix.
 _extra_script_dirs = {}
+_dir_prefix = {}
+PUBLIC_PREFIX = "eplan_"
 
 _jobs = {}
 _jobs_lock = threading.Lock()
@@ -61,9 +63,32 @@ _addin_checked = 0.0
 _ADDIN_RECHECK_S = 600   # a "no add-in" answer is re-checked after this long
 
 
-def register_script_dir(path: str, helpers: list = None) -> None:
+def register_script_dir(path: str, helpers: list = None, prefix: str = PUBLIC_PREFIX) -> None:
     """Add a folder of .cs scripts to the library (used by extensions through eplan_mcp.ext)."""
-    _extra_script_dirs[os.path.abspath(path)] = [os.path.abspath(h) for h in (helpers or [])]
+    path = os.path.abspath(path)
+    _extra_script_dirs[path] = [os.path.abspath(h) for h in (helpers or [])]
+    _dir_prefix[path] = prefix
+
+
+def _prefix_for_dir(folder: str) -> str:
+    """Tool-name prefix of a library folder: the extension's own, "eplan_" for the public one."""
+    return _dir_prefix.get(os.path.abspath(folder), PUBLIC_PREFIX)
+
+
+def read_run_file(run_id: str, name: str) -> str:
+    """A file from a run's folder (result.json, result_data.json, progress.json)."""
+    if not run_id or any(c in run_id for c in ("\\", "/", ":", ".")) or name not in ("result.json", "result_data.json", "progress.json"):
+        raise ValueError("Bad run id or file name.")
+    with _jobs_lock:
+        job = _jobs.get(run_id)
+    folders = [job["folder"]] if job and job.get("folder") else []
+    if os.path.isdir(RUNS_DIR):
+        folders += [os.path.join(RUNS_DIR, day, run_id) for day in sorted(os.listdir(RUNS_DIR), reverse=True)]
+    for folder in folders:
+        path = os.path.join(folder, name)
+        if os.path.isfile(path):
+            return _read(path)
+    raise FileNotFoundError(f"No {name} for run {run_id}.")
 
 
 def _helpers_for(script_path: str) -> list:

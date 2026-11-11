@@ -361,7 +361,8 @@ def _register_core(app, registry, mode):
 # DYNAMIC ACTIONS REGISTRATION
 # ============================================================================
 
-def register_actions(actions_module, prefix="eplan_", app=None, registry=None, mode=None):
+def register_actions(actions_module, prefix="eplan_", app=None, registry=None, mode=None,
+                     publish=True):
     """
     Dynamically registers all actions exported by the actions module.
     Wraps the functions to return formatted JSON.
@@ -383,7 +384,7 @@ def register_actions(actions_module, prefix="eplan_", app=None, registry=None, m
             continue
 
         tool_name = f"{prefix}{func_name}"
-        published = _is_published(tool_name, mode)
+        published = publish and _is_published(tool_name, mode)
 
         if registry is not None:
             # Store (module, attr) rather than the function object so the
@@ -502,6 +503,12 @@ def build_app(mode="full", app=None, registry=None):
             raise
 
     loaded = load_extensions(app=app, registry=registry, mode=mode)
+
+    # Library scripts (public + any folders extensions registered above): always indexed,
+    # published as separate tools only with EPLAN_MCP_SCRIPT_TOOLS=publish.
+    import script_tools
+    script_tools.register(app, registry, mode, register_actions)
+    script_tools.register_resources(app)
 
     if mode == "discovery":
         # The three meta-tools are the only way to reach everything above, so

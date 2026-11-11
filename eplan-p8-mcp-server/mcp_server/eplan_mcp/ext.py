@@ -55,11 +55,12 @@ def run_script(code: str = None, script: str = None, args: dict = None, project:
     return scripthost.script_run(code=code, script=script, args=args, project=project, **options)
 
 
-def register_script_dir(path: str, helpers: list = None) -> None:
+def register_script_dir(path: str, helpers: list = None, prefix: str = "eplan_") -> None:
     """Add a folder of .cs scripts to the script library. `helpers` are .cs files compiled into
-    every script from that folder (an extension's own helper library)."""
+    every script from that folder (an extension's own helper library); `prefix` names the
+    script tools from that folder (use the extension's TOOL_PREFIX)."""
     from api.actions import scripthost
-    scripthost.register_script_dir(path, helpers=helpers)
+    scripthost.register_script_dir(path, helpers=helpers, prefix=prefix)
 
 
 def scratch_root() -> str:
