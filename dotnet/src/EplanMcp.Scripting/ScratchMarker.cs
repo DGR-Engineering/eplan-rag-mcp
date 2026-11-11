@@ -23,7 +23,7 @@ namespace EplanMcp.Scripting
             why = "";
             if (string.IsNullOrEmpty(projectLinkFile)) { why = "the project has no link file"; return false; }
             var marker = PathFor(projectLinkFile);
-            if (!File.Exists(marker)) { why = "it is not a scratch clone (no marker file)"; return false; }
+            if (!File.Exists(marker)) { why = "no marker file"; return false; }
             try
             {
                 using var doc = JsonDocument.Parse(File.ReadAllText(marker));

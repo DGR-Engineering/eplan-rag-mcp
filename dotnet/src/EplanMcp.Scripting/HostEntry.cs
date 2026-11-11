@@ -25,6 +25,7 @@ namespace EplanMcp.Scripting
                 var req = Json.Deserialize<RunRequest>(File.ReadAllText(requestPath, Encoding.UTF8))
                           ?? throw new InvalidDataException("The request file is empty.");
                 if (string.IsNullOrEmpty(req.RunFolder)) req.RunFolder = Path.GetDirectoryName(resultPath) ?? "";
+                AddEplanApiReferences(req);
                 var result = RunPipeline.Execute(req, new EplanEnvironment(runtime, hostDir == null ? null : new[] { hostDir }));
                 try { text = Json.Serialize(result); }
                 catch (Exception e)
@@ -76,6 +77,24 @@ namespace EplanMcp.Scripting
             }
             catch (Exception e) { hello.Error = (hello.Error == null ? "" : hello.Error + "; ") + "open projects unavailable: " + e.Message; }
             TryWrite(resultPath, Json.Serialize(hello));
+        }
+
+        /// <summary>EPLAN loads its API assemblies lazily and the compile references come from what is
+        /// loaded, so a script using one nothing has touched yet (MasterData in a fresh session) failed
+        /// with CS0234. Reference every API assembly in EPLAN's Bin, as the offline host does. Found by
+        /// name, so no EPLAN type is touched here (the bootstrap resolver may not be in place yet).</summary>
+        private static void AddEplanApiReferences(RunRequest req)
+        {
+            string? bin = null;
+            foreach (var a in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (a.IsDynamic || a.GetName().Name != "Eplan.EplApi.BaseNetu") continue;
+                try { bin = Path.GetDirectoryName(a.Location); } catch (NotSupportedException) { }
+                if (!string.IsNullOrEmpty(bin)) break;
+            }
+            if (string.IsNullOrEmpty(bin) || !Directory.Exists(bin)) return;
+            foreach (var dll in Directory.GetFiles(bin!, "Eplan.EplApi.*Netu.dll"))
+                if (!req.References.Contains(dll)) req.References.Add(dll);
         }
 
         // ------------------------------------------------------------------ bootstrap path
