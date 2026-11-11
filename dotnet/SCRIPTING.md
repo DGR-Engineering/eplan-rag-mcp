@@ -3,6 +3,13 @@
 A script is ordinary C# against the EPLAN API, compiled with EPLAN's own Roslyn and run inside the
 open EPLAN session, with no build and no restart. Run one with `eplan_script_run`.
 
+Three runtimes run the same scripts: the add-in (registered with `EplApiModuleActionNet`), the
+bootstrap (`ExecuteScript`, nothing registered) and the offline host (no EPLAN window, closed
+projects only, scripts with `@needs offline` or `@needs either`). `runtime="auto"` takes the add-in
+when it answers, else the bootstrap. All need the EPLAN API developer license.
+
+![One run: header, compile, safety check, write gate, run, result, unload](../docs/images/script-run-flow.svg)
+
 ## The smallest script
 
 A statement body is enough. The usual `using`s are added for you, and `ctx` is the script context:
@@ -105,7 +112,53 @@ Comment lines at the very top declare what a script is:
 `@unsafe` counts only in a saved library script. In ad-hoc code it is ignored with a warning, and
 the safety check runs as if it were absent.
 
+## Write your first script
+
+Shift every function on a page to the right. It reads its arguments, checks the budget in the
+loop, changes nothing on a dry run and locks each object before it writes:
+
+```csharp
+// @tool     shift_functions
+// @desc     Moves every function on one page right by dx mm; a dry run only counts them.
+// @schema   1
+// @arg      page  string  required  Page Name or IdentifyingName (exact)
+// @arg      dx    number  required  Shift in mm
+// @writes   true
+// @needs    session
+using Eplan.EplApi.Base;
+using EplanMcp.Eplan;
+using EplanMcp.Scripting;
+
+public static class Script
+{
+    public static object Run(ScriptContext ctx)
+    {
+        var page = Pages.Require(ctx.RequireProject(), ctx.Args.Require("page"));
+        double dx = ctx.Args.Number("dx");
+        int moved = 0;
+        foreach (var f in Functions.OnPage(page))
+        {
+            ctx.Budget.Check();                        // stop point for time limit and cancel
+            if (!ctx.DryRun)
+            {
+                ctx.Lock(f);                           // lock before every change
+                f.Location = new PointD(f.Location.X + dx, f.Location.Y);
+            }
+            moved++;
+        }
+        return new { page = page.Name, dry_run = ctx.DryRun, moved };
+    }
+}
+```
+
+Try it on a scratch clone with `compile_only=True` first, then `dry_run=True`, then for real:
+`eplan_script_run(code=<source>, project="<scratch>.elk", dry_run=True, args={"page": "<page>", "dx": 10})`.
+Save it in a library folder to make it a tool. A real library script would also take a `limit`
+and read each move back (see `function_move.cs`).
+
 ## Writing
+
+![Write gate: scratch clone or the five real-project conditions](../docs/images/write-gate.svg)
 
 A script that changes anything must declare `// @writes true`. Then:
 
@@ -122,6 +175,8 @@ A script that changes anything must declare `// @writes true`. Then:
 - Read-only runs reject EPLAN writes at compile time (`EMCP002`): write-verb methods, assignments,
   and `++` / `--` on EPLAN properties.
 - `dynamic` is rejected everywhere (`EMCP005`): calls through it bypass the check.
+- Everywhere, calls that change open projects, processes or files are rejected (`EMCP001`), and so
+  is an unbounded loop without `ctx.Budget.Check()` (`EMCP003`).
 - Each writing run is one undo step named `EplanMcp <tool> <run id>`. Undo is best effort.
 
 The safety check is a guard against mistakes, not a sandbox: a script is C# running in EPLAN.
@@ -144,7 +199,8 @@ are compiled into every script from that folder. Set `EPLAN_MCP_SCRIPT_TOOLS=pub
 publish each library script as its own MCP tool.
 
 A published script tool that may write defaults to `dry_run=True`, has no `allow_real_project`
-(so it writes only to scratch clones), and is never marked read-only. Library scripts that write
+(so it writes only to scratch clones), and is never marked read-only. `eplan_script_run` itself
+defaults to `dry_run=False`: pass `dry_run=True` there to preview. Library scripts that write
 follow the same rules as the other writing tools:
 
 - **Address objects so the address survives between calls.** Use the handle the live tools use
@@ -160,15 +216,40 @@ follow the same rules as the other writing tools:
   array, or another project unless `allow_other_project=true`, and writes one outcome per row to a
   file.
 
-The public library's object tools:
+## Library tools
 
-| Tool | What it does |
-|---|---|
-| `text_placements` | Lists a page's texts (symbol property texts and free texts) with size, font size, box settings and a handle |
-| `text_set_height`, `text_set_box` | Set the height or the alignment-box settings of one text, by handle |
-| `text_create` | Places a free text and reads it back; returns its handle and the undo call |
-| `line_styles`, `line_styles_set` | Read, or set within an area and a limit, the line style, factor and width of lines and arcs |
-| `function_move` | Moves functions on a page by handle or exact name |
-| `function_remove` | Removes functions on a page by exact name, guarded by a symbol prefix; never a main function, never every function on the page (`eplan_live_remove_placement` removes one placement of any type by handle) |
-| `macrobox_snapshot`, `macrobox_restore` | Save every macro box to a file; re-create the missing ones |
-| `parts_snapshot`, `parts_restore` | Save every function's parts to a file; put them back |
+The public library in `dotnet/scripts/`. Run each with `eplan_script_run(script="<tool>")`, or as
+`eplan_<tool>` when published. "Needs" is the `@needs` header: `session` runs on the add-in and
+the bootstrap, `either` also offline, `gui` needs the interactive EPLAN window.
+
+![Library tools grouped as read and write](../docs/images/library-tools.svg)
+
+| Tool | What it does | R/W | Key guard or argument | Needs |
+|---|---|---|---|---|
+| `project_info` | Name, link file, page and function counts, read-only flag | R | | either |
+| `page_inspect` | Pages with their placements, texts and functions | R | only counts without `page` or `max` | session |
+| `page_property` | Page properties by id or identifying name, or all of them | R | `page` required | session |
+| `layer_table` | The graphical layer table with its flags | R | | session |
+| `function_inspect` | Placed functions on a page or matching a device tag | R | `max` (default 500) | session |
+| `function_dump` | Functions by device tag, supplementary fields per language, placements | R | `dt` required | session |
+| `unplaced_functions` | Functions no page reaches, filtered by symbol name | R | `symbol_prefix` required | session |
+| `cable_shields` | Shield functions and shielded cables with colours | R | `max` (default 10) | session |
+| `symbol_library_inspect` | A symbol library's symbols, one variant, or arrangements (opened read-only) | R | `library` required | session |
+| `macrobox_links` | How placements tie to macro boxes on the given pages | R | `pages` required | session |
+| `macro_prepare_inspect` | What "Prepare macros" left on each macro box | R | `pages` required | session |
+| `read_selection` | Editor and page-navigator selection | R | | gui |
+| `text_placements` | A page's texts with height, font size, box settings and a handle | R | `page` required | session |
+| `line_styles` | Lines and arcs on a page or in an area, with style, factor, width | R | `limit` (default 200) | session |
+| `macrobox_snapshot` | Every macro box to a snapshot file | R (file) | | session |
+| `parts_snapshot` | Every function's parts to a snapshot file | R (file) | `page_prefix` | session |
+| `text_set_height` | Height of one text: absolute or a factor | W | `handle` from `text_placements`; `allow_shared` | session |
+| `text_set_box` | Alignment-box settings of one text | W | `handle`; only settings passed are written | session |
+| `text_create` | Places a free text, reads it back, returns handle and undo call | W | `page`, `text`, `x`, `y` required | session |
+| `line_styles_set` | Style, factor or width of every line and arc in an area | W | area and `limit` required | session |
+| `function_move` | Moves functions to page coordinates | W | handle or exact name; one match each | session |
+| `function_remove` | Removes functions by exact name | W | `symbol_prefix`; never a main function or the whole page | session |
+| `macrobox_restore` | Re-creates missing macro boxes from a snapshot | W | `limit` required; snapshot must match the project | session |
+| `parts_restore` | Puts snapshot parts back on functions | W | `limit` required; snapshot must match the project | session |
+| `set_selection` | Selects pages in the navigator, reads the selection back | W (selection) | `@unsafe` | gui |
+
+`eplan_live_remove_placement` removes one placement of any type by handle.

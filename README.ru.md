@@ -49,6 +49,10 @@ claude mcp list   # в списке должен появиться "eplan"
 
 ![Claude CLI configured](image.png)
 
+**Script host:** typed C# inside EPLAN, in three runtimes (add-in, bootstrap, offline). Guide in English: [`dotnet/SCRIPTING.md`](dotnet/SCRIPTING.md).
+
+![Script host architecture](docs/images/script-host-architecture.svg)
+
 #### Предварительное условие
 
 Прежде чем сервер сможет подключиться, в EPLAN нужно включить удалённый доступ: параметр

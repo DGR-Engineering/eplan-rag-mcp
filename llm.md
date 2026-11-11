@@ -52,6 +52,27 @@ It exposes **253 tools** (full tool-by-tool reference: [the project wiki](https:
   get each as its own `eplan_<name>` tool. Those that write default to
   `dry_run=True`, write only to scratch clones, take handles from their read
   tool, and need a `limit` for bulk changes (see dotnet/SCRIPTING.md).
+  `eplan_script_run` itself defaults to `dry_run=False`: pass `dry_run=True` to preview.
+  Library scripts (name: args; `*` = required):
+  - Texts: `text_placements` (page*, symbol_prefix, include_free_texts),
+    `text_set_height` (page*, handle*, height | factor, target=height|font_size, allow_shared),
+    `text_set_box` (page*, handle*, has_box, box_fixed_width, box_fixed_height,
+    fitting_permitted, never_hyphenate, remove_breaks, box_width, box_height, allow_shared),
+    `text_create` (page*, text*, x*, y*, height, debug).
+  - Lines: `line_styles` (page*, x0, y0, x1, y1, limit),
+    `line_styles_set` (page*, x0*, y0*, x1*, y1*, limit*, style, factor, width).
+  - Functions: `function_move` (page*, moves*: [{handle | name, x, y}]),
+    `function_remove` (page*, names*, symbol_prefix*).
+  - Snapshots: `macrobox_snapshot` (out), `macrobox_restore` (snapshot*, limit*,
+    update_existing, allow_other_project, out), `parts_snapshot` (page_prefix, out),
+    `parts_restore` (snapshot*, limit*, page_prefix, promote_main, allow_other_project, out).
+  - Read inspectors: `project_info` (also offline), `page_inspect` (page, max, include),
+    `page_property` (page*, ids, names, index), `function_inspect` (page, device_tag, max,
+    with_id), `function_dump` (dt*, page, max, fields), `unplaced_functions` (symbol_prefix*,
+    max), `cable_shields` (dt, max), `layer_table`, `symbol_library_inspect` (library*,
+    mode=symbols|variant|arrangements, symbol, variant), `macrobox_links` (pages*, out),
+    `macro_prepare_inspect` (pages*, out), `read_selection` (GUI).
+  - Selection: `set_selection` (pages, page, select_all_on_page, clear; writes the selection only).
 - **8 connection/utility tools**: `eplan_versions`, `eplan_servers`,
   `eplan_connect`, `eplan_status`, `eplan_ping`, `eplan_test`,
   `eplan_disconnect`, `eplan_list_extensions`.
@@ -316,7 +337,9 @@ All of these exist as `eplan_*` tools:
     Return plain data. The run already holds a `LockingStep`.
   - Call `eplan_script_hello` once first: it reports the host version, which
     runtime answers (`addin`, else `bootstrap`), the EPLAN version and the
-    license. Both runtimes need the EPLAN API developer license.
+    license. Every runtime (add-in, bootstrap, offline) needs the EPLAN API
+    developer license. `runtime="offline"` works on a closed `.elk` path with no
+    EPLAN window, for scripts with `@needs offline` or `@needs either`.
   - **Writes:** declare `// @writes true`. Ad-hoc scripts may write only when
     the TARGET project is a scratch clone from `eplan_scratch_project_create`,
     and a writing script may touch only `ctx.Project` (no `ProjectManager`, no
