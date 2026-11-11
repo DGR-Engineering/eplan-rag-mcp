@@ -24,7 +24,7 @@ class FakeManager:
                 return {"success": False, "message": "action not found"}
             result_path = action.split('/result:"')[1].rstrip('"')
             if action.startswith("EplanMcp_Hello"):
-                payload = {"protocol": 1, "core_version": "0.1.0", "runtime": "addin"}
+                payload = {"protocol": 1, "core_version": scripthost.HOST_VERSION, "runtime": "addin"}
             else:
                 req = json.load(open(action.split('/request:"')[1].split('"')[0], encoding="utf-8"))
                 payload = dict(self.result, run_id=req["run_id"], runtime="addin",
@@ -35,7 +35,7 @@ class FakeManager:
             script = action.split('/ScriptFile:"')[1].rstrip('"')
             text = open(script, encoding="utf-8").read()
             result_path = text.split('string resultPath = @"')[1].split('";')[0].replace('""', '"')
-            json.dump({"protocol": 1, "core_version": "0.1.0", "runtime": "bootstrap", "ok": True,
+            json.dump({"protocol": 1, "core_version": scripthost.HOST_VERSION, "runtime": "bootstrap", "ok": True,
                        "phase": "done"}, open(result_path, "w", encoding="utf-8"))
             return {"success": True}
         raise AssertionError("unexpected action " + action)
@@ -47,7 +47,7 @@ def host(tmp_path, monkeypatch):
     (host_dir / "Bootstrap").mkdir(parents=True)
     template = os.path.join(scripthost.DOTNET_DIR, "src", "EplanMcp.Scripting", "Bootstrap", "bootstrap.cs.template")
     (host_dir / "Bootstrap" / "bootstrap.cs.template").write_text(open(template, encoding="utf-8").read(), encoding="utf-8")
-    (host_dir / "eplanmcp-version.txt").write_text("0.1.0")
+    (host_dir / "eplanmcp-version.txt").write_text(scripthost.HOST_VERSION)
     monkeypatch.setattr(scripthost, "HOST_DIR", str(host_dir))
     monkeypatch.setattr(scripthost, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(scripthost, "_addin_ok", None)
@@ -201,7 +201,7 @@ def _fake_offline_host(queue, stop_event):
         while not stop_event.is_set():
             tmp = os.path.join(queue, "status.json.tmp")     # atomic, like the real host
             with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({"protocol": 1, "core_version": "0.1.0", "runtime": "offline",
+                json.dump({"protocol": 1, "core_version": scripthost.HOST_VERSION, "runtime": "offline",
                            "process_id": os.getpid()}, f)
             os.replace(tmp, os.path.join(queue, "status.json"))
             for f in os.listdir(queue):
@@ -457,3 +457,29 @@ def test_a_host_that_deleted_its_status_but_still_runs_is_not_doubled(host, monk
     alive["pid"] = None                            # now it has exited
     assert scripthost._offline_ensure(start_timeout=2)["process_id"] == 777
     assert len(started) == 1
+
+
+# --- host version ----------------------------------------------------------------------------
+
+def test_hello_warns_on_a_host_version_mismatch_but_still_succeeds(host, monkeypatch):
+    class OldHost(FakeManager):
+        def execute_action(self, action, quiet_mode=True, **kwargs):
+            out = super().execute_action(action, quiet_mode, **kwargs)
+            result_path = action.split('/result:"')[1].rstrip('"')
+            data = json.load(open(result_path, encoding="utf-8"))
+            json.dump(dict(data, core_version="0.1.0"), open(result_path, "w", encoding="utf-8"))
+            return out
+
+    use(monkeypatch, OldHost(addin=True))
+    hello = scripthost.script_hello(runtime="addin")
+    assert hello["success"] is True
+    assert "0.1.0" in hello["warning"] and scripthost.HOST_VERSION in hello["warning"]
+
+    use(monkeypatch, FakeManager(addin=True))
+    assert "warning" not in scripthost.script_hello(runtime="addin")
+
+
+def test_host_version_matches_the_dotnet_build_version():
+    import re
+    props = open(os.path.join(scripthost.DOTNET_DIR, "Directory.Build.props"), encoding="utf-8").read()
+    assert re.search(r"<Version>([^<]+)</Version>", props).group(1) == scripthost.HOST_VERSION

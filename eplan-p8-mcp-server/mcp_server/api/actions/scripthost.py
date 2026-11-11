@@ -40,6 +40,10 @@ from ._base import _get_connected_manager
 
 PROTOCOL = 1
 
+# The host version this server is written against (<Version> in dotnet/Directory.Build.props).
+# A host reporting another version still runs; script_hello adds a warning.
+HOST_VERSION = "0.2.0"
+
 # Out-of-band human switch for real-project writes: set for the server process by a person (MCP
 # config or shell), never by a tool call. Read at call time.
 REAL_PROJECT_SWITCH = "EPLAN_MCP_ALLOW_REAL_PROJECT_WRITES"
@@ -475,6 +479,16 @@ def _pick_runtime(runtime: str) -> str:
     return "addin" if _addin_ok else "bootstrap"
 
 
+def _version_warning(data: dict) -> dict:
+    """Add a warning when the host reports a core version other than HOST_VERSION."""
+    reported = data.get("core_version")
+    if reported and reported != HOST_VERSION:
+        data["warning"] = (f"Host version {reported} differs from the version this server expects "
+                           f"({HOST_VERSION}). Update the host (rebuild dotnet/ or install the "
+                           "matching release) and restart EPLAN for the add-in.")
+    return data
+
+
 def script_hello(runtime: str = "auto") -> dict:
     """
     Handshake with the script host: core version, protocol, features, EPLAN version, license and
@@ -495,15 +509,15 @@ def script_hello(runtime: str = "auto") -> dict:
         except OSError as e:     # not built, did not start, queue files locked
             return {"success": False, "runtime": "offline", "error": str(e)}
         status["success"] = status.get("protocol") == PROTOCOL
-        return status
+        return _version_warning(status)
     if runtime == "auto":
         hello = _hello("addin", timeout=20.0)
         _addin_ok = bool(hello.get("success")) and hello.get("protocol") == PROTOCOL
         if _addin_ok:
-            return hello
+            return _version_warning(hello)
         boot = _hello("bootstrap")
         boot["addin"] = {"available": False, "detail": hello.get("error")}
-        return boot
+        return _version_warning(boot)
     hello = _hello(runtime)
     if runtime == "addin":
         _addin_ok = bool(hello.get("success"))
@@ -511,7 +525,7 @@ def script_hello(runtime: str = "auto") -> dict:
         hello["success"] = False
         hello["error"] = (f"Host protocol {hello.get('protocol')} does not match server protocol "
                           f"{PROTOCOL}. Update the host (rebuild, restart EPLAN for the add-in).")
-    return hello
+    return _version_warning(hello)
 
 
 def script_run(code: str = None, script: str = None, args: dict = None, project: str = None,
