@@ -98,6 +98,8 @@ def register(app, registry, mode, register_fn):
     """Index (and, on opt-in, publish) one tool per library script."""
     publish = os.environ.get("EPLAN_MCP_SCRIPT_TOOLS", "").lower() == "publish"
     taken = set(app._tool_manager._tools) if app is not None else set()
+    if registry is not None:
+        taken |= set(registry.names())     # hidden (discovery-mode) tools count too
     by_prefix = {}
     registered = []
     for prefix, path, header in library():
