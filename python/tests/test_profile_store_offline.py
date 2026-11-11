@@ -58,7 +58,10 @@ def test_the_default_root_is_never_inside_this_repository(monkeypatch):
     """
     monkeypatch.delenv("EPLAN_MCP_PROFILES", raising=False)
     repo = os.path.abspath(os.path.dirname(REPO_SERVER))
-    assert os.path.commonpath([os.path.abspath(PS.profile_root()), repo]) != repo
+    root = os.path.abspath(PS.profile_root())
+    if os.path.splitdrive(root)[0].lower() != os.path.splitdrive(repo)[0].lower():
+        return  # another drive (CI checks out on D:) cannot be inside the repository
+    assert os.path.commonpath([root, repo]) != repo
 
 
 @pytest.mark.parametrize("bad", [
