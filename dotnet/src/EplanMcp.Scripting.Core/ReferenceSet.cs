@@ -73,6 +73,18 @@ namespace EplanMcp.Scripting.Core
             return new ReferenceSet(paths, Hashing.Sha256Hex(fp));
         }
 
+        /// <summary>A reference set from explicit files plus the runtime directory: for compiling
+        /// scripts outside EPLAN (CI checks against an installed EPLAN's Bin folder).</summary>
+        public static ReferenceSet FromPaths(IEnumerable<string> files)
+        {
+            var paths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var p in files) AddIfManaged(paths, p);
+            var runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location);
+            if (!string.IsNullOrEmpty(runtimeDir))
+                foreach (var p in Directory.EnumerateFiles(runtimeDir!, "*.dll")) AddIfManaged(paths, p);
+            return new ReferenceSet(paths, Hashing.Sha256Hex(string.Join(";", paths.Keys.OrderBy(k => k))));
+        }
+
         private static void AddIfManaged(Dictionary<string, string> paths, string p)
         {
             if (string.IsNullOrEmpty(p) || !File.Exists(p)) return;

@@ -1,0 +1,113 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Runtime.Loader;
+using System.Text;
+using EplanMcp.Contracts;
+using EplanMcp.Scripting.Core;
+
+namespace EplanMcp.Scripting
+{
+    /// <summary>
+    /// The two entry points every runtime calls: <see cref="Run"/> and <see cref="Hello"/>. Both read
+    /// and write files and never throw, so the caller always gets a JSON answer.
+    /// </summary>
+    public static class HostEntry
+    {
+        /// <summary>Runs the request file and writes the result file.</summary>
+        public static void Run(string requestPath, string resultPath, string runtime, string? hostDir = null)
+        {
+            RunResult result;
+            try
+            {
+                var req = Json.Deserialize<RunRequest>(File.ReadAllText(requestPath, Encoding.UTF8))
+                          ?? throw new InvalidDataException("The request file is empty.");
+                if (string.IsNullOrEmpty(req.RunFolder)) req.RunFolder = Path.GetDirectoryName(resultPath) ?? "";
+                result = RunPipeline.Execute(req, new EplanEnvironment(runtime, hostDir == null ? null : new[] { hostDir }));
+            }
+            catch (Exception e)
+            {
+                result = new RunResult { CoreVersion = RunPipeline.CoreVersion, Runtime = runtime, Phase = "request", Error = "Could not read the request: " + e.Message };
+            }
+            WriteAtomically(resultPath, Json.Serialize(result));
+        }
+
+        /// <summary>Handshake: versions, features, EPLAN version, license and open projects.</summary>
+        public static void Hello(string resultPath, string runtime)
+        {
+            var hello = new HelloResult
+            {
+                CoreVersion = RunPipeline.CoreVersion,
+                Runtime = runtime,
+                ProcessId = Environment.ProcessId,
+                RoslynVersion = typeof(Microsoft.CodeAnalysis.CSharp.CSharpCompilation).Assembly.GetName().Version?.ToString(),
+            };
+            try
+            {
+                var app = new Eplan.EplApi.System.EplApplication();
+                hello.EplanVersion = app.Version;
+                hello.License = app.License;
+            }
+            catch (Exception e) { hello.Error = "EPLAN version/license unavailable: " + e.Message; }
+            try
+            {
+                using (new Eplan.EplApi.DataModel.LockingStep())
+                    hello.OpenProjects = new Eplan.EplApi.DataModel.ProjectManager().OpenProjects.Select(p => p.ProjectLinkFilePath).ToArray();
+            }
+            catch (Exception e) { hello.Error = (hello.Error == null ? "" : hello.Error + "; ") + "open projects unavailable: " + e.Message; }
+            WriteAtomically(resultPath, Json.Serialize(hello));
+        }
+
+        // ------------------------------------------------------------------ bootstrap path
+
+        /// <summary>Called by the reflection-only bootstrap script after it loaded the host
+        /// assemblies from bytes. No EPLAN types appear in this method's body, so the resolver is in
+        /// place before anything EPLAN-bound is JIT-compiled.</summary>
+        public static void RunFromBootstrap(string requestPath, string resultPath, string hostDir)
+        {
+            InstallResolver();
+            RunCore(requestPath, resultPath, hostDir);
+        }
+
+        public static void HelloFromBootstrap(string resultPath)
+        {
+            InstallResolver();
+            HelloCore(resultPath);
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void RunCore(string requestPath, string resultPath, string hostDir) => Run(requestPath, resultPath, "bootstrap", hostDir);
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void HelloCore(string resultPath) => Hello(resultPath, "bootstrap");
+
+        private static bool _resolverInstalled;
+
+        /// <summary>Our context was created by the bootstrap from bytes; anything it does not hold
+        /// (the EPLAN API, Roslyn) resolves to the copy EPLAN has already loaded.</summary>
+        private static void InstallResolver()
+        {
+            if (_resolverInstalled) return;
+            _resolverInstalled = true;
+            var own = AssemblyLoadContext.GetLoadContext(typeof(HostEntry).Assembly);
+            if (own == null || own == AssemblyLoadContext.Default) return;
+            own.Resolving += (ctx, name) =>
+                AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a =>
+                    string.Equals(a.GetName().Name, name.Name, StringComparison.OrdinalIgnoreCase)
+                    && AssemblyLoadContext.GetLoadContext(a) != ctx
+                    && !(AssemblyLoadContext.GetLoadContext(a)?.IsCollectible ?? false));
+        }
+
+        /// <summary>The server polls for the result file, so it must never see half a file.</summary>
+        private static void WriteAtomically(string path, string text)
+        {
+            var dir = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            var tmp = path + ".tmp";
+            File.WriteAllText(tmp, text, new UTF8Encoding(false));
+            File.Move(tmp, path, overwrite: true);
+        }
+    }
+}

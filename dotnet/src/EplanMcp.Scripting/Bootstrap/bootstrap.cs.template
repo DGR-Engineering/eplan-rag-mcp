@@ -1,0 +1,85 @@
+// EplanMcp script bootstrap. The server fills in the placeholder values and runs this file with
+// EPLAN's ExecuteScript action. It loads the host assemblies listed in the manifest FROM BYTES
+// (so the files on disk are never locked), checks each one's SHA-256 against the manifest, keeps
+// them in one named load context per core version, and hands the request to HostEntry.
+//
+// Reflection only, on purpose: EPLAN's script engine compiles against a fixed reference list that
+// has neither the EPLAN data model nor System.Runtime.Loader.
+//
+// Licensing: the host assemblies are unsigned, so this path needs the same EPLAN API developer
+// license as the add-in. It exists to avoid registration and restarts, not to avoid signing.
+using System;
+using System.Collections;
+using System.IO;
+using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
+using Eplan.EplApi.Scripting;
+
+public class EplanMcpBootstrap
+{
+    [Start]
+    public void Run()
+    {
+        string hostDir = @"{{HOST_DIR}}";
+        string requestPath = @"{{REQUEST_PATH}}";
+        string resultPath = @"{{RESULT_PATH}}";
+        string mode = "{{MODE}}";              // run | hello
+        string coreVersion = "{{CORE_VERSION}}";
+        try
+        {
+            Type alcType = typeof(object).Assembly.GetType("System.Runtime.Loader.AssemblyLoadContext", true);
+            string alcName = "EplanMcp.Core/" + coreVersion;
+            object alc = null;
+            foreach (object c in (IEnumerable)alcType.GetProperty("All").GetValue(null, null))
+            {
+                if (alcName.Equals(alcType.GetProperty("Name").GetValue(c, null))) { alc = c; break; }
+            }
+            if (alc == null)
+            {
+                alc = Activator.CreateInstance(alcType, new object[] { alcName, false });
+                MethodInfo loadFromStream = alcType.GetMethod("LoadFromStream", new Type[] { typeof(Stream) });
+                string[] lines = File.ReadAllLines(Path.Combine(hostDir, "eplanmcp-manifest.txt"));
+                foreach (string raw in lines)
+                {
+                    string line = raw.Trim();
+                    if (line.Length == 0 || line.StartsWith("#")) continue;
+                    int space = line.IndexOf(' ');
+                    string expected = line.Substring(0, space).Trim().ToLowerInvariant();
+                    string file = line.Substring(space + 1).Trim();
+                    byte[] bytes = File.ReadAllBytes(Path.Combine(hostDir, file));
+                    string actual = Hex(SHA256.Create().ComputeHash(bytes));
+                    if (actual != expected)
+                        throw new InvalidOperationException("Host file " + file + " does not match its manifest hash. Reinstall the host.");
+                    loadFromStream.Invoke(alc, new object[] { new MemoryStream(bytes) });
+                }
+            }
+
+            Assembly scripting = null;
+            foreach (Assembly a in (IEnumerable)alcType.GetProperty("Assemblies").GetValue(alc, null))
+            {
+                if (a.GetName().Name == "EplanMcp.Scripting") { scripting = a; break; }
+            }
+            if (scripting == null) throw new InvalidOperationException("EplanMcp.Scripting is not in the host manifest.");
+            Type entry = scripting.GetType("EplanMcp.Scripting.HostEntry", true);
+            if (mode == "hello")
+                entry.GetMethod("HelloFromBootstrap").Invoke(null, new object[] { resultPath });
+            else
+                entry.GetMethod("RunFromBootstrap").Invoke(null, new object[] { requestPath, resultPath, hostDir });
+        }
+        catch (Exception e)
+        {
+            Exception inner = e;
+            while (inner is TargetInvocationException && inner.InnerException != null) inner = inner.InnerException;
+            string msg = (inner.GetType().Name + ": " + inner.Message).Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", " ").Replace("\n", " ");
+            File.WriteAllText(resultPath, "{\"protocol\":1,\"runtime\":\"bootstrap\",\"ok\":false,\"phase\":\"request\",\"error\":\"Bootstrap failed: " + msg + "\"}");
+        }
+    }
+
+    private static string Hex(byte[] hash)
+    {
+        StringBuilder sb = new StringBuilder();
+        foreach (byte b in hash) sb.Append(b.ToString("x2"));
+        return sb.ToString();
+    }
+}
