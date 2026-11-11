@@ -32,7 +32,12 @@ public static class Script
             if (refusal != null) { result["error"] = refusal; result["dry_run"] = true; }
             else result = MacroBoxes.Restore(ctx, project, rows, update, dryRun: false);
         }
-        else if (!ctx.DryRun) result["dry_run"] = false;   // nothing to do: still report the real call
+        else if (!ctx.DryRun)
+        {
+            // Nothing to do: report the real call, with the real call's counts.
+            result["dry_run"] = false;
+            result.Remove("would_create"); result.Remove("would_restyle");
+        }
         result["bytes"] = PlainJson.Write(path, result["rows"]);
         result["out"] = path;
         result.Remove("rows");

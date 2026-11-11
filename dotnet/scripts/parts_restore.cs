@@ -1,6 +1,7 @@
 // @tool     parts_restore
 // @desc     Puts the parts saved by parts_snapshot back on the matching functions: by object id when the snapshot is from this project, else by page, device tag, function definition, symbol and connection points. Checks the file belongs to the project, refuses more than limit changes, reads every change back and writes one outcome per function (ties with their candidates) to a file. Dry run by default.
 // @schema   1
+// @requires core>=0.2.1
 // @arg      snapshot             string  required   A file written by parts_snapshot
 // @arg      limit                int     required   Max functions that may be changed; more means nothing is written
 // @arg      page_prefix          string  optional   Only rows (and functions) on pages whose name starts with this
@@ -41,7 +42,13 @@ public static class Script
             if (refusal != null) result["error"] = refusal;
             else result = Parts.Restore(ctx, project, snapshot, prefix, promote, dryRun: false, useIds);
         }
-        else if (!ctx.DryRun) result["dry_run"] = false;   // nothing to do: still report the real call
+        else if (!ctx.DryRun)
+        {
+            // Nothing to do: report the real call, with the real call's counts.
+            result["dry_run"] = false;
+            result["changed"] = 0; result.Remove("would_change");
+            result["promoted_to_main"] = 0; result.Remove("would_promote_to_main");
+        }
         result["snapshot_schema"] = schema;
         result["bytes"] = PlainJson.Write(path, result["rows"]);
         result["out"] = path;
