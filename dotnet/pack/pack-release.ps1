@@ -18,7 +18,10 @@ param([string]$EplanVersion = "")
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot          # dotnet/
-$props = @("-c", "Release")
+# A release must not carry the build machine's paths (they name the user): no debug info, and
+# source paths mapped to /_/. --no-incremental so these settings apply to every assembly.
+$props = @("-c", "Release", "--no-incremental", "-p:ContinuousIntegrationBuild=true",
+           "-p:DebugType=none", "-p:DebugSymbols=false")
 if ($EplanVersion) { $props += "-p:EplanVersion=$EplanVersion" }
 
 dotnet build (Join-Path $root "src/EplanMcp.Host.AddIn") @props | Out-Host
@@ -70,10 +73,23 @@ $mainVersion = if ($EplanVersion) { $EplanVersion.Substring(0, 4) + ".*" } else 
 </Settings>
 "@ | Set-Content -Encoding utf8 (Join-Path $addon "CFG/install.xml")
 
+$offlineStage = Join-Path $stage "offline"
+New-Item -ItemType Directory -Force $offlineStage | Out-Null
+Copy-Item (Join-Path $root "artifacts/offline/*") $offlineStage -Recurse -Exclude "*.pdb"
+
+# Refuse to package anything that still names this machine's user or folders.
+$needles = @($env:USERPROFILE, (Split-Path -Parent $root), $env:USERNAME) | Where-Object { $_ -and $_.Length -ge 3 }
+$leaks = Get-ChildItem $stage -Recurse -File | Where-Object {
+    $bytes = [IO.File]::ReadAllBytes($_.FullName)
+    $text = [Text.Encoding]::ASCII.GetString($bytes) + [Text.Encoding]::Unicode.GetString($bytes)
+    $needles | Where-Object { $text.IndexOf($_, [StringComparison]::OrdinalIgnoreCase) -ge 0 }
+}
+if ($leaks) { throw "Release files contain local paths or the user name: $($leaks.Name -join ', ')" }
+
 $addonZip = Join-Path $out "EplanMcp-$version-addon.zip"
 $offlineZip = Join-Path $out "EplanMcp-$version-offline.zip"
 Compress-Archive -Path (Join-Path $stage "EplanMcp") -DestinationPath $addonZip
-Compress-Archive -Path (Join-Path $root "artifacts/offline/*") -DestinationPath $offlineZip
+Compress-Archive -Path (Join-Path $offlineStage "*") -DestinationPath $offlineZip
 $sums = Get-FileHash $addonZip, $offlineZip -Algorithm SHA256 |
     ForEach-Object { "{0}  {1}" -f $_.Hash.ToLowerInvariant(), (Split-Path $_.Path -Leaf) }
 $sums | Set-Content -Encoding ascii (Join-Path $out "SHA256SUMS.txt")
