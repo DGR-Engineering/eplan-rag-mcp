@@ -42,7 +42,7 @@ namespace EplanMcp.Scripting.Core
 
             var options = new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary,
                 optimizationLevel: OptimizationLevel.Debug,
-                nullableContextOptions: NullableContextOptions.Disable,
+                nullableContextOptions: NullableContextOptions.Annotations,   // "?" allowed, no nullable warnings
                 allowUnsafe: false,
                 platform: Platform.AnyCpu);
             var compilation = CSharpCompilation.Create(assemblyName, trees, refs.References, options);

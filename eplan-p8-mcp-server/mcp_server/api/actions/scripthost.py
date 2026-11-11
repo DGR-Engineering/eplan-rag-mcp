@@ -44,8 +44,11 @@ DOTNET_DIR = os.path.join(_REPO_ROOT, "dotnet")
 HOST_DIR = os.environ.get("EPLAN_MCP_HOST_DIR") or os.path.join(DOTNET_DIR, "artifacts", "host")
 
 # Per-user run folders: request, result, progress, heartbeat, cancel. Never inside a checkout.
-RUNS_DIR = os.environ.get("EPLAN_MCP_RUNS_DIR") or os.path.join(
-    os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "EplanMcp", "runs")
+# NOT under %LOCALAPPDATA% / %APPDATA%: measured on EPLAN 2027.0.3, an ExecuteScript file path
+# written in the long form C:\Users\<user>\AppData\... is silently ignored - the call "succeeds"
+# and nothing runs ("The name of the script file is missing (ScriptFile)" in the system
+# messages). The user profile itself, ProgramData and the 8.3-form TEMP all work.
+RUNS_DIR = os.environ.get("EPLAN_MCP_RUNS_DIR") or os.path.join(os.path.expanduser("~"), ".eplan-mcp", "runs")
 
 # Script libraries: the public one here, plus any folders an extension adds.
 _extra_script_dirs = []

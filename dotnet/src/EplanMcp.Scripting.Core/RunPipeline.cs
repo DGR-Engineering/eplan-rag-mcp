@@ -160,7 +160,7 @@ namespace EplanMcp.Scripting.Core
                 var verify = session.Verify();
                 res.Unloaded = ScriptRunner.WaitForUnload(run.Context);
                 if (res.Unloaded == false)
-                    res.Warnings.Add("The script's code could not be unloaded (it probably left an event handler, timer or static reference behind). Memory grows until EPLAN restarts.");
+                    res.Warnings.Add("The script's code was still loaded after the run. Usually harmless (one small assembly, measured with no visible memory growth); if it keeps happening the script may leave an event handler, timer or static reference behind.");
                 string? errorText = run.Error;
                 bool stopped = run.Stopped;
 

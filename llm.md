@@ -349,6 +349,12 @@ All of these exist as `eplan_*` tools:
 
 ## 6. Caveats & gotchas
 
+- **Never pass an action a file path under the long-form `AppData` folder.**
+  `ExecuteScript /ScriptFile:"C:\Users\<user>\AppData\Local\..."` (or `...\Roaming\...`)
+  is silently ignored on 2027.0.3: success is reported and nothing runs. Use a path
+  under the user profile (`~\.eplan-mcp`), ProgramData, Documents or the 8.3-form
+  TEMP. Measured 2026-11-10; see `dotnet/tests/live/results-2027.0.3.md`.
+
 - **Connect before acting.** Unconnected calls return a "Not connected" error.
 - **`project_name` is optional** — omitting it uses the selected project. Pass the
   full `.elk` path to be explicit. Windows paths must be escaped (`\\`) or use `/`.
