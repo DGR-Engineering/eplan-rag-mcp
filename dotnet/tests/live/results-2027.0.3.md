@@ -186,9 +186,11 @@ open.
 
 ### 0.2.0 fixes
 
-Measured 2026-11-11 on the same PC and EPLAN 2027.0.3. The host was rebuilt in Release twice:
-first at `71b4473`, then at `80cfc6c` after the follow-up below. EPLAN was restarted on each
-build. The target was a fresh scratch clone of the same mid-size schematic project (75 pages,
+Measured 2026-11-11 on the same PC and EPLAN 2027.0.3. The host was rebuilt in Release three
+times: at `71b4473`, at `80cfc6c`, and as core **0.2.1** at `a358c5c`. EPLAN was restarted on each
+build, and both runtimes report core 0.2.1. The version moved because the refusal result and the
+helper signatures that `parts_snapshot` and `parts_restore` use (now `@requires core>=0.2.1`) are
+part of the contract. The target was a fresh scratch clone of the same mid-size schematic project (75 pages,
 8,687 functions, 1,022 of them with parts). The clone carried the scratch marker and was opened
 alone. Each call was made the way the MCP server builds it.
 
@@ -222,7 +224,9 @@ local, which is a different change. With `allow_shared`, the font size target al
 with "The database is write-protected", and nothing was written. Both targets are now refused up
 front, in a dry run as well, with a pointer to `text_set_box` or to local placements.
 `allow_shared` stays for compatibility. Live after the rebuild, all four calls were clean
-refusals (height and font size, each dry and real), and 0 of 1,180 texts on the page changed.
+refusals (height and font size, each dry and real), and 0 of 1,180 texts on the page changed. On
+0.2.1 the same refusal also comes without `allow_shared`, dry and real. Before, that call asked
+for `allow_shared`, which can no longer help.
 
 **`parts_restore` coverage.** `parts_snapshot` writes schema 2. Each row adds:
 
@@ -271,7 +275,8 @@ The restore then ran:
 - The dry run reported `would_change` 8.
 - `limit` 7 was refused, and nothing was written.
 - `limit` 8 wrote 8, all `set` by id and read back.
-- A re-run changed nothing and reported `dry_run: false`.
+- A re-run changed nothing and reported `dry_run: false`. On 0.2.1 it also carries the real
+  call's counts (`changed` 0), not the dry pass's `would_change`.
 
 A fresh snapshot equals the original row for row, 8,687 ids, 0 differences. That includes the
 strip's main function and the article placement's main function, which were not touched. The
@@ -284,9 +289,9 @@ reopen, a dry restore again matched all 1,022 rows by id.
 - `line_styles` refuses a partial area, naming the corners it got. All four corners, or none,
   work as before (3 and 33 lines).
 - A restore with nothing to do reports the real `dry_run`.
-- A text whose bounds read 0,0,0,0 reports `bounds: null` with `bounds_reason`. On this project,
-  the 5 such texts belonged to one symbol type and did have values. So the reason names both
-  causes: an empty value, or a symbol type EPLAN computes no bounds for.
+- A text whose bounds read 0,0,0,0 reports `bounds: null` with `bounds_reason`. The reason names
+  both causes seen live: a property text with an empty value (found within the first 5 pages),
+  and 5 texts of one symbol type that do have values.
 - The stale-handle message says the object no longer exists, or the symbol's texts changed, and
   to re-read.
 
