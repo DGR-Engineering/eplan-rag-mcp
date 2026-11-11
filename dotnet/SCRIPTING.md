@@ -114,47 +114,30 @@ the safety check runs as if it were absent.
 
 ## Write your first script
 
-Shift every function on a page to the right. It reads its arguments, checks the budget in the
-loop, changes nothing on a dry run and locks each object before it writes:
+Shift every function on a page to the right. It declares that it writes, checks the budget in
+the loop, changes nothing on a dry run and locks each object before it changes it:
 
 ```csharp
-// @tool     shift_functions
-// @desc     Moves every function on one page right by dx mm; a dry run only counts them.
-// @schema   1
-// @arg      page  string  required  Page Name or IdentifyingName (exact)
-// @arg      dx    number  required  Shift in mm
 // @writes   true
-// @needs    session
-using Eplan.EplApi.Base;
-using EplanMcp.Eplan;
-using EplanMcp.Scripting;
-
-public static class Script
+// @arg      page  string  required  Page Name (exact)
+// @arg      dx    number  required  Shift in mm
+var page = Pages.Require(ctx.RequireProject(), ctx.Args.Require("page"));
+int moved = 0;
+foreach (var f in Functions.OnPage(page))
 {
-    public static object Run(ScriptContext ctx)
-    {
-        var page = Pages.Require(ctx.RequireProject(), ctx.Args.Require("page"));
-        double dx = ctx.Args.Number("dx");
-        int moved = 0;
-        foreach (var f in Functions.OnPage(page))
-        {
-            ctx.Budget.Check();                        // stop point for time limit and cancel
-            if (!ctx.DryRun)
-            {
-                ctx.Lock(f);                           // lock before every change
-                f.Location = new PointD(f.Location.X + dx, f.Location.Y);
-            }
-            moved++;
-        }
-        return new { page = page.Name, dry_run = ctx.DryRun, moved };
-    }
+    ctx.Budget.Check();                                   // stop point: time limit, cancel
+    if (ctx.DryRun) { moved++; continue; }                // preview: change nothing
+    ctx.Lock(f);                                          // lock before every change
+    f.Location = new PointD(f.Location.X + ctx.Args.Number("dx"), f.Location.Y);
+    moved++;
 }
+return new { page = page.Name, dry_run = ctx.DryRun, moved };
 ```
 
-Try it on a scratch clone with `compile_only=True` first, then `dry_run=True`, then for real:
+Run it on a scratch clone: `compile_only=True` first, then `dry_run=True`, then for real:
 `eplan_script_run(code=<source>, project="<scratch>.elk", dry_run=True, args={"page": "<page>", "dx": 10})`.
-Save it in a library folder to make it a tool. A real library script would also take a `limit`
-and read each move back (see `function_move.cs`).
+To make it a library tool, start from `_template.cs` and add `@tool` and `@desc`. A real library
+script would also take a `limit` and read each move back (see `function_move.cs`).
 
 ## Writing
 

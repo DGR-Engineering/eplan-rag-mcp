@@ -7,12 +7,12 @@
   </defs>
   <rect width="860" height="470" fill="#ffffff"/>
 
-  <rect x="300" y="14" width="260" height="46" rx="8" fill="#f6f8fa" stroke="#57606a"/>
+  <rect x="240" y="14" width="380" height="46" rx="8" fill="#f6f8fa" stroke="#57606a"/>
   <text x="430" y="35" text-anchor="middle" font-weight="600">Script declares // @writes true</text>
   <text x="430" y="52" text-anchor="middle" font-size="11" fill="#57606a">without it, EPLAN writes fail at compile time (EMCP002)</text>
   <line x1="430" y1="60" x2="430" y2="84" stroke="#57606a" stroke-width="1.5" marker-end="url(#a)"/>
 
-  <rect x="270" y="86" width="320" height="46" rx="8" fill="#ddf4ff" stroke="#0969da"/>
+  <rect x="230" y="86" width="400" height="46" rx="8" fill="#ddf4ff" stroke="#0969da"/>
   <text x="430" y="107" text-anchor="middle" font-weight="600">Is the TARGET project a scratch clone?</text>
   <text x="430" y="124" text-anchor="middle" font-size="11" fill="#57606a">marker file &lt;project&gt;.elk.eplanmcp-scratch beside the .elk</text>
 

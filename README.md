@@ -97,7 +97,7 @@ A tool-by-tool reference lives in [the project wiki](https://github.com/covagash
 
 The script host runs ordinary, typed C# against the EPLAN API (`using Eplan.EplApi.DataModel;`
 works) inside EPLAN, with no build and no restart. It compiles with EPLAN's own Roslyn, checks
-the script for unsafe calls, runs it in a collectible context and unloads it. The same script runs
+the script for unsafe calls, runs it in a collectible context and tries to unload it. The same script runs
 in three runtimes: a registered add-in, a bootstrap through `ExecuteScript` (nothing to register),
 or an offline host that needs no EPLAN window and works on closed projects. Writes go only to
 scratch clones unless a person enables real-project writes and approves each saved script. The
