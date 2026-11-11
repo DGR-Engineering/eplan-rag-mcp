@@ -2,8 +2,10 @@
 Add-in development loop: build, deploy, restart EPLAN, verify the actions loaded.
 
 The repo being developed is described by a MANIFEST, so nothing here knows any particular add-in.
-A manifest is a JSON file (or a name an extension registered with
-eplan_mcp.ext.register_addin_manifest):
+The published tools take only a manifest NAME that an extension registered with
+eplan_mcp.ext.register_addin_manifest (a dict or a JSON file): a manifest names the commands that
+build and deploy, so the model must not be able to point one at an arbitrary file. Extension code
+may also pass a manifest dict, or load a file with load_manifest_file(). Format:
 
     {
       "root": "..",                                   # optional; relative to the manifest file
@@ -20,8 +22,9 @@ eplan_mcp.ext.register_addin_manifest):
 Relative paths resolve against "root" (default: the manifest file's folder); "{root}" is
 substituted in the deploy command and cwd.
 
-Nothing deploys unless asked: addin_build only compiles, addin_deploy runs exactly the manifest's
-deploy command, and addin_update deploys only with do_deploy=True.
+Nothing deploys unless asked: addin_build only compiles (which can still run build code from the
+project's MSBuild targets), addin_deploy runs exactly the manifest's deploy command, and
+addin_update deploys only with do_deploy=True and restarts EPLAN only with restart=True.
 """
 
 import json
@@ -47,24 +50,29 @@ def register_manifest(name: str, manifest) -> None:
 
 
 def _load_manifest(manifest):
-    """(manifest dict with absolute root, None) or (None, error dict)."""
+    """(manifest dict with absolute root, None) or (None, error dict). Accepts a registered name
+    or a dict (Python callers only: MCP types the parameter as a string). Never a file path."""
     if isinstance(manifest, dict):
         m = dict(manifest)
         m["root"] = os.path.abspath(m.get("root") or os.getcwd())
         return m, None
-    if not manifest:
-        known = ", ".join(sorted(_MANIFESTS)) or "none registered"
+    known = ", ".join(sorted(_MANIFESTS)) or "none registered"
+    if not manifest or not isinstance(manifest, str) or manifest not in _MANIFESTS:
         return None, {"success": False,
-                      "error": "manifest is required: a JSON file path or a registered name "
-                               "(%s)." % known}
-    source = _MANIFESTS.get(manifest, manifest)
+                      "error": "manifest must be a registered manifest name (%s). A manifest file "
+                               "is registered by an extension (eplan_mcp.ext."
+                               "register_addin_manifest), not passed by path." % known}
+    source = _MANIFESTS[manifest]
     if isinstance(source, dict):
         return dict(source), None
+    return load_manifest_file(source)
+
+
+def load_manifest_file(source: str):
+    """(manifest dict with absolute root, None) or (None, error dict) from a JSON file. For
+    extension code; the published tools take registered names only."""
     if not os.path.isfile(source):
-        known = ", ".join(sorted(_MANIFESTS)) or "none registered"
-        return None, {"success": False,
-                      "error": "Manifest %r is neither a file nor a registered name (%s)."
-                               % (manifest, known)}
+        return None, {"success": False, "error": "Manifest file not found: %s" % source}
     try:
         with open(source, encoding="utf-8") as f:
             m = json.load(f)
@@ -83,11 +91,11 @@ def _path(m: dict, p: str) -> str:
 
 def addin_build(manifest: str, projects: list = None, configuration: str = "Release") -> dict:
     """
-    dotnet build the add-in project(s) a manifest lists. Compile only - nothing is deployed.
+    dotnet build the add-in project(s) a manifest lists. Nothing is deployed, but a build runs
+    the projects' MSBuild targets, which can execute build code - so this is not read-only.
 
     Args:
-        manifest: Path to a manifest JSON file, or a name an extension registered (see the
-            module docs for the format).
+        manifest: The name an extension registered the manifest under.
         projects: Project names from the manifest's "projects" to build. Default: all of them.
         configuration: "Release" (default) or "Debug". Deploy scripts usually ship Release, so a
             Debug build followed by a deploy can ship a stale Release DLL.
@@ -145,7 +153,7 @@ def addin_deploy(manifest: str) -> dict:
     the local instance.
 
     Args:
-        manifest: Path to a manifest JSON file, or a registered name.
+        manifest: The name an extension registered the manifest under.
 
     Returns:
         {"success", "exit_code", "summary": [lines]} - summary is the lines matching the
@@ -192,7 +200,7 @@ def list_addin_actions(prefix: str = None, source_dirs: list = None,
     Args:
         prefix: Action-name prefix, e.g. "MyCo_". Default: the manifest's actions_prefix.
         source_dirs: Folders to scan. Default: the manifest's source_dirs.
-        manifest: Optional manifest supplying the defaults above.
+        manifest: Optional registered manifest name supplying the defaults above.
 
     Returns:
         {"success", "prefix", "actions": [names]}
@@ -236,12 +244,17 @@ def list_addin_actions(prefix: str = None, source_dirs: list = None,
     return out
 
 
-def addin_update(manifest: str, restart: bool = True, do_build: bool = True,
-                 configuration: str = "Release", do_deploy: bool = True,
+def addin_update(manifest: str, restart: bool = False, do_build: bool = True,
+                 configuration: str = "Release", do_deploy: bool = False,
                  reopen_project: bool = True, verify: bool = True) -> dict:
     """
     One-shot develop-deploy-test cycle: build -> shut EPLAN down -> deploy -> relaunch EPLAN ->
     reopen the focused project -> verify the add-in's actions are registered.
+
+    THIS CAN DEPLOY AND RESTART EPLAN. Both are opt-in: do_deploy=True runs the manifest's deploy
+    command (which can replace files other EPLAN users load), restart=True exits and relaunches
+    the local EPLAN. Pass them only when the user asked for a deploy / restart. With the defaults
+    it builds and verifies only.
 
     EPLAN holds loaded add-in DLLs and only loads new code at its next start, so the local
     instance is stopped BEFORE the deploy and started after it. If the shutdown fails nothing is
@@ -251,11 +264,11 @@ def addin_update(manifest: str, restart: bool = True, do_build: bool = True,
     mid-edit in EPLAN. A NEW action name may also need the add-in re-registered after the restart.
 
     Args:
-        manifest: Path to a manifest JSON file, or a registered name.
-        restart: Recycle EPLAN around the deploy (default True).
+        manifest: The name an extension registered the manifest under.
+        restart: Recycle EPLAN around the deploy (default False).
         do_build: Build every manifest project first (default True).
         configuration: Build configuration (default "Release").
-        do_deploy: Run the manifest's deploy command (default True).
+        do_deploy: Run the manifest's deploy command (default False).
         reopen_project: Reopen the previously focused project after the restart (default True).
         verify: Run eplan_verify_actions afterwards (default True) on the manifest's
             "verify_actions" list, or on list_addin_actions' names when it has none.
@@ -312,5 +325,7 @@ def addin_update(manifest: str, restart: bool = True, do_build: bool = True,
     return {"success": ok, "steps": steps}
 
 
+# A build runs MSBuild targets from the project: it may run build code, so it is not read-only.
+addin_build.__mcp_annotations__ = {"readOnlyHint": False}
 addin_deploy.__mcp_annotations__ = {"readOnlyHint": False, "destructiveHint": True}
 addin_update.__mcp_annotations__ = {"readOnlyHint": False, "destructiveHint": True}

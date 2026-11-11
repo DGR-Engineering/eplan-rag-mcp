@@ -100,6 +100,8 @@ def test_bootstrap_escapes_quotes_in_paths(host, monkeypatch):
 
 def test_real_project_write_needs_saved_script_and_confirm(host, monkeypatch):
     use(monkeypatch, FakeManager())
+    monkeypatch.setenv("EPLAN_MCP_SCRIPT_DIRS", str(host))
+    monkeypatch.setenv(scripthost.REAL_PROJECT_SWITCH, "1")
     out = scripthost.script_run(code="return 1;", allow_real_project=True)
     assert out["success"] is False and "saved script" in out["error"]
 
@@ -196,8 +198,11 @@ def _fake_offline_host(queue, stop_event):
 
     def loop():
         while not stop_event.is_set():
-            json.dump({"protocol": 1, "core_version": "0.1.0", "runtime": "offline"},
-                      open(os.path.join(queue, "status.json"), "w", encoding="utf-8"))
+            tmp = os.path.join(queue, "status.json.tmp")     # atomic, like the real host
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"protocol": 1, "core_version": "0.1.0", "runtime": "offline",
+                           "process_id": os.getpid()}, f)
+            os.replace(tmp, os.path.join(queue, "status.json"))
             for f in os.listdir(queue):
                 if f.endswith(".json") and f != "status.json":
                     job = json.load(open(os.path.join(queue, f), encoding="utf-8"))
@@ -220,10 +225,18 @@ def test_offline_runtime_queues_and_needs_no_eplan_connection(host, monkeypatch,
     monkeypatch.setattr(scripthost, "OFFLINE_QUEUE", str(queue))
     monkeypatch.setattr(scripthost, "_get_connected_manager",
                         lambda: (None, {"success": False, "message": "Not connected"}))
+    monkeypatch.setattr(scripthost, "_pid_alive", lambda pid: pid == os.getpid())
+    monkeypatch.setattr(scripthost, "OFFLINE_DIR", str(tmp_path / "never-start-a-real-host"))
     stop = threading.Event()
     _fake_offline_host(str(queue), stop)
+    import time as _t
+    for _ in range(100):
+        if (queue / "status.json").exists():
+            break
+        _t.sleep(0.02)
     try:
-        assert scripthost.script_hello(runtime="offline")["success"] is True
+        hello = scripthost.script_hello(runtime="offline")
+        assert hello["success"] is True, hello
         out = scripthost.script_run(code="// @needs offline\nreturn 1;", runtime="offline", project="C:/x/a.elk")
         assert out["success"] is True and out["runtime"] == "offline" and out["result"] == "C:/x/a.elk"
     finally:
@@ -241,6 +254,190 @@ def test_offline_stop_writes_the_stop_file(host, monkeypatch, tmp_path):
     queue = tmp_path / "queue"
     queue.mkdir()
     monkeypatch.setattr(scripthost, "OFFLINE_QUEUE", str(queue))
-    json.dump({"protocol": 1}, open(queue / "status.json", "w"))
+    monkeypatch.setattr(scripthost, "_pid_alive", lambda pid: True)
+    with open(queue / "status.json", "w") as f:
+        json.dump({"protocol": 1, "process_id": 4242}, f)
     assert scripthost.script_offline_stop()["success"] is True
     assert (queue / "stop").exists()
+
+
+# --- review fixes ----------------------------------------------------------------------------
+
+def _lib(tmp_path, monkeypatch):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    (lib / "good.cs").write_text("// @tool good\nreturn 1;", encoding="utf-8")
+    monkeypatch.setenv("EPLAN_MCP_SCRIPT_DIRS", str(lib))
+    return lib
+
+
+def test_script_paths_must_be_cs_files_inside_a_library_folder(host, monkeypatch, tmp_path):
+    use(monkeypatch, FakeManager())
+    lib = _lib(tmp_path, monkeypatch)
+    outside = tmp_path / "evil.cs"
+    outside.write_text("// @unsafe\nreturn 1;", encoding="utf-8")
+    (lib / "notes.txt").write_text("x", encoding="utf-8")
+    for bad in (str(outside), str(lib / "notes.txt"), str(lib / ".." / "evil.cs"), str(lib)):
+        out = scripthost.script_run(script=bad)
+        assert out["success"] is False and out["error"], bad
+    assert "not inside a script library" in scripthost.script_run(script=str(outside))["error"]
+    for bad_name in ("../evil", "a b", "x;y"):
+        assert scripthost.script_run(script=bad_name)["success"] is False
+    path, _ = scripthost._resolve_script(str(lib / "good.cs"))
+    assert path.endswith("good.cs")
+    assert scripthost._resolve_script("good")[0].endswith("good.cs")
+
+
+def test_only_library_scripts_get_script_path(host, monkeypatch, tmp_path):
+    use(monkeypatch, FakeManager())
+    lib = _lib(tmp_path, monkeypatch)
+    out = scripthost.script_run(script="good")
+    assert out.get("run_id"), out
+    req = json.load(open(os.path.join(os.path.dirname(out_path(out)), "request.json"), encoding="utf-8"))
+    assert os.path.normcase(req["script_path"]) == os.path.normcase(str(lib / "good.cs"))
+    stray = tmp_path / "helper.cs"
+    stray.write_text("class H {}", encoding="utf-8")
+    out = scripthost.script_run(script="good", helpers=[str(stray)])
+    assert out["success"] is False and "helpers" in out["error"]
+
+
+def test_non_utf8_script_is_a_clear_error(host, monkeypatch, tmp_path):
+    use(monkeypatch, FakeManager())
+    lib = _lib(tmp_path, monkeypatch)
+    (lib / "bad.cs").write_bytes(b"// @tool bad\nreturn \xff\xfe;")
+    out = scripthost.script_run(script="bad")
+    assert out["success"] is False and "not UTF-8" in out["error"]
+    assert scripthost._resolve_script("good")[0].endswith("good.cs")   # a bad neighbour is skipped
+    listed = {s["tool"]: s for s in scripthost.script_list()["scripts"]}
+    assert "not UTF-8" in listed["bad"]["error"]
+
+
+def test_library_resource_refuses_outside_paths(host, monkeypatch, tmp_path):
+    import script_tools
+    _lib(tmp_path, monkeypatch)
+    outside = tmp_path / "evil.cs"
+    outside.write_text("secret", encoding="utf-8")
+
+    class App:
+        def __init__(self):
+            self.res = {}
+
+        def resource(self, uri, **kw):
+            return lambda fn: self.res.setdefault(uri, fn)
+    app = App()
+    script_tools.register_resources(app)
+    read = app.res["eplan-script://library/{name}"]
+    assert read("good").startswith("// @tool good")
+    with pytest.raises(ValueError):
+        read(str(outside))
+
+
+def test_real_project_writes_need_the_human_switch(host, monkeypatch):
+    use(monkeypatch, FakeManager())
+    monkeypatch.setenv("EPLAN_MCP_SCRIPT_DIRS", str(host))
+    monkeypatch.delenv(scripthost.REAL_PROJECT_SWITCH, raising=False)
+    script = host / "w.cs"
+    script.write_text("// @writes true\nreturn 1;", encoding="utf-8")
+    out = scripthost.script_run(script=str(script), allow_real_project=True, confirm="ab" * 8)
+    assert out["success"] is False and scripthost.REAL_PROJECT_SWITCH in out["error"]
+    monkeypatch.setenv(scripthost.REAL_PROJECT_SWITCH, "true")      # only exactly "1"
+    assert scripthost.script_run(script=str(script), allow_real_project=True,
+                                 confirm="ab" * 8)["success"] is False
+    assert "confirm_code" in scripthost.script_run.__doc__ and "not a security boundary" in \
+        " ".join(scripthost.script_run.__doc__.split())
+
+
+def test_claim_is_released_when_the_start_fails(host, monkeypatch):
+    use(monkeypatch, FakeManager())
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(scripthost, "_addin_ok", True)      # no hello: fail in the start itself
+    monkeypatch.setattr(scripthost, "_new_run_folder", boom)
+    with pytest.raises(OSError):
+        scripthost.script_run(code="return 1;")
+    assert not scripthost._jobs
+    monkeypatch.undo()
+
+
+def test_failed_addin_run_rechecks_the_addin(host, monkeypatch):
+    class Gone(FakeManager):
+        def execute_action(self, action, quiet_mode=True, **kwargs):
+            if action.startswith("EplanMcp_RunScript"):
+                return {"success": False, "message": "action not found"}
+            return super().execute_action(action, quiet_mode, **kwargs)
+
+    use(monkeypatch, Gone())
+    out = scripthost.script_run(code="return 1;")
+    assert out["success"] is False and scripthost._addin_ok is None
+    monkeypatch.setattr(scripthost, "_addin_ok", True)
+    use(monkeypatch, FakeManager())
+    assert scripthost.script_run(code="return 1;")["success"] is True
+    assert scripthost._addin_ok is True     # a run with a result keeps the add-in
+
+
+def test_offline_timeout_removes_the_queue_file(host, monkeypatch, tmp_path):
+    queue = tmp_path / "queue"
+    queue.mkdir()
+    monkeypatch.setattr(scripthost, "OFFLINE_QUEUE", str(queue))
+    monkeypatch.setattr(scripthost, "_offline_ensure", lambda: {})
+    out = scripthost._invoke_offline("r1", "req", str(tmp_path / "none.json"), timeout=0.3)
+    assert out["success"] is False and not (queue / "r1.json").exists()
+
+
+def _offline_env(monkeypatch, tmp_path, alive):
+    import subprocess
+    queue = tmp_path / "queue"
+    queue.mkdir()
+    exe_dir = tmp_path / "offline"
+    exe_dir.mkdir()
+    (exe_dir / "EplanMcp.Host.Offline.exe").write_text("x")
+    monkeypatch.setattr(scripthost, "OFFLINE_QUEUE", str(queue))
+    monkeypatch.setattr(scripthost, "OFFLINE_DIR", str(exe_dir))
+    monkeypatch.setattr(scripthost, "_OFFLINE_STOP_WAIT_S", 0.5)
+    monkeypatch.setattr(scripthost, "_pid_alive", lambda pid: alive["pid"] == pid)
+    started = []
+
+    def popen(cmd, **kw):
+        started.append(cmd)
+        alive["pid"] = 777
+        with open(queue / "status.json", "w") as f:
+            json.dump({"protocol": 1, "process_id": 777}, f)
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    return queue, started
+
+
+def test_a_long_run_with_a_stale_status_never_starts_a_second_host(host, monkeypatch, tmp_path):
+    alive = {"pid": 555}
+    queue, started = _offline_env(monkeypatch, tmp_path, alive)
+    with open(queue / "status.json", "w") as f:
+        json.dump({"protocol": 1, "process_id": 555}, f)
+    os.utime(queue / "status.json", (1, 1))            # heartbeat far in the past
+    assert scripthost._offline_ensure()["process_id"] == 555 and not started
+
+
+def test_dead_host_and_leftover_stop_file_start_a_fresh_host(host, monkeypatch, tmp_path):
+    alive = {"pid": None}
+    queue, started = _offline_env(monkeypatch, tmp_path, alive)
+    with open(queue / "status.json", "w") as f:
+        json.dump({"protocol": 1, "process_id": 555}, f)
+    (queue / "stop").write_text("stop")
+    assert scripthost._offline_status() is None
+    assert scripthost._offline_ensure(start_timeout=2)["process_id"] == 777
+    assert len(started) == 1 and not (queue / "stop").exists()
+
+
+def test_a_stopping_host_that_is_still_alive_is_not_doubled(host, monkeypatch, tmp_path):
+    alive = {"pid": 555}
+    queue, started = _offline_env(monkeypatch, tmp_path, alive)
+    with open(queue / "status.json", "w") as f:
+        json.dump({"protocol": 1, "process_id": 555}, f)
+    (queue / "stop").write_text("stop")
+    with pytest.raises(TimeoutError):
+        scripthost._offline_ensure()
+    assert not started and (queue / "stop").exists()
+
+
+def test_pid_alive_knows_this_process_is_not_the_host():
+    assert scripthost._pid_alive(os.getpid()) is False      # alive, but not EplanMcp.Host.Offline
+    assert scripthost._pid_alive(999999) is False

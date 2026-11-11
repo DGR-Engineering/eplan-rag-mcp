@@ -13,12 +13,12 @@ from eplan_mcp import ext
 @pytest.fixture
 def ps(monkeypatch):
     calls = []
-    reply = {"stdout": '{"success": true, "watch_id": "abc"}', "rc": 0}
+    reply = {"stdout": '{"success": true, "watch_id": "0123456789ab"}', "rc": 0}
 
     def run(cmd, **kw):
         args_file = cmd[cmd.index("-ArgsFile") + 1]
         with open(args_file, encoding="utf-8") as f:
-            calls.append({"cmd": cmd, "args": json.load(f), "kw": kw})
+            calls.append({"cmd": cmd, "args": json.load(f), "kw": kw, "file": args_file})
         return types.SimpleNamespace(returncode=reply["rc"], stdout=reply["stdout"], stderr="")
     monkeypatch.setattr(ui.subprocess, "run", run)
     monkeypatch.setattr(ui, "_DIALOG_PRESETS", {})
@@ -41,9 +41,24 @@ def test_drive_passes_args_through_a_file(ps):
     reply["stdout"] = '{"success": true, "count": 0, "windows": []}'
     r = ui.ui_drive("list_windows", {"title_regex": "^A & B$"})
     assert r["success"] and r["op"] == "list_windows"
-    assert calls[0]["args"] == {"title_regex": "^A & B$"}
+    assert calls[0]["args"] == {"title_regex": "^A & B$", "process": "EPLAN"}
     assert calls[0]["cmd"][calls[0]["cmd"].index("-File") + 1] == ui.DRIVER_PS1
     assert calls[0]["kw"]["encoding"] == "utf-8"
+    assert not os.path.exists(calls[0]["file"])      # the per-call args file is deleted
+
+
+def test_window_lookups_default_to_eplan(ps):
+    calls, _ = ps
+    ui.ui_drive("list_windows", {"process": ""})               # explicit: every process
+    assert calls[-1]["args"] == {"process": ""}
+    ui.ui_drive("click", {"window": {"title_regex": "^Save$"}, "selector": {}})
+    assert calls[-1]["args"]["window"] == {"title_regex": "^Save$", "process": "EPLAN"}
+    ui.ui_drive("click", {"window": "Save as", "selector": {}})
+    assert calls[-1]["args"]["window"]["process"] == "EPLAN"
+    ui.ui_drive("click", {"window": {"hwnd": 5}, "selector": {}})
+    assert calls[-1]["args"]["window"] == {"hwnd": 5}
+    ui.ui_drive("dump", {"window": "123"})
+    assert calls[-1]["args"]["window"] == "123"
 
 
 def test_non_json_output_is_reported_not_raised(ps):
@@ -68,7 +83,7 @@ def test_watch_start_puts_caller_rules_before_the_preset(ps):
     assert r["success"]
     sent = calls[0]["args"]
     assert sent["mode"] == "start" and sent["timeout_s"] == 30
-    assert sent["rules"][0] == mine and sent["rules"][1]["button_name"] == "^OK$"
+    assert sent["rules"][0] == dict(mine, process="EPLAN") and sent["rules"][1]["button_name"] == "^OK$"
 
 
 def test_watch_start_validates(ps):
@@ -82,10 +97,12 @@ def test_watch_start_validates(ps):
 
 def test_watch_stop(ps):
     calls, _ = ps
-    assert "required" in ui.ui_dismiss_watch_stop("")["error"]
-    ui.ui_dismiss_watch_stop("abc", status_only=True)
-    assert calls[-1]["args"] == {"mode": "status", "watch_id": "abc"}
-    ui.ui_dismiss_watch_stop("abc")
+    for bad in ("", "abc", "0123456789AB", "0123456789ab'; rm", None):
+        assert "12 lowercase hex" in ui.ui_dismiss_watch_stop(bad)["error"]
+    assert not calls
+    ui.ui_dismiss_watch_stop("0123456789ab", status_only=True)
+    assert calls[-1]["args"] == {"mode": "status", "watch_id": "0123456789ab"}
+    ui.ui_dismiss_watch_stop("0123456789ab")
     assert calls[-1]["args"]["mode"] == "stop"
 
 

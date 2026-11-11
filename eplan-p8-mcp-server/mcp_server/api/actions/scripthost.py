@@ -17,9 +17,12 @@ Both need the EPLAN API developer license (the host is unsigned). `runtime="auto
 add-in when it answers EplanMcp_Hello, else the bootstrap.
 
 Writes (D7): ad-hoc scripts may write only when the TARGET project is a scratch clone made by
-scratch_project_create (it leaves a marker file), and a writing script may touch only ctx.Project. A real project needs a SAVED script,
-allow_real_project=True, and confirm=<the confirm_code a compile_only run of the same script, args
-and helpers returned>; take a backup first (eplan_backup_project). This is a guard against mistakes, not a sandbox: a script is C# running in EPLAN.
+scratch_project_create (it leaves a marker file), and a writing script may touch only ctx.Project. A real project needs
+EPLAN_MCP_ALLOW_REAL_PROJECT_WRITES=1 in the server's environment (set by a person), a SAVED
+library script, allow_real_project=True, and confirm=<the confirm_code a compile_only run of the
+same script, args and helpers returned, shown to the user>; take a backup first
+(eplan_backup_project). The scratch marker is a guard against mistakes, not a security boundary:
+a script is C# running in EPLAN.
 
 Runs are jobs. script_run waits up to wait_seconds and returns the result, or a run_id to follow
 with script_status (progress, heartbeat) and stop with script_cancel. A script stops only where it
@@ -28,6 +31,7 @@ calls ctx.Budget.Check(): EPLAN cannot abort a running script.
 
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -35,6 +39,10 @@ import uuid
 from ._base import _get_connected_manager
 
 PROTOCOL = 1
+
+# Out-of-band human switch for real-project writes: set for the server process by a person (MCP
+# config or shell), never by a tool call. Read at call time.
+REAL_PROJECT_SWITCH = "EPLAN_MCP_ALLOW_REAL_PROJECT_WRITES"
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", "..", ".."))
@@ -132,32 +140,79 @@ def _parse_header(source: str) -> dict:
     return header
 
 
+_SCRIPT_NAME = re.compile(r"[A-Za-z0-9_.-]+")
+
+
+def _real(path: str) -> str:
+    return os.path.normcase(os.path.realpath(path))
+
+
+def _in_script_dir(path: str) -> bool:
+    """True when `path` (symlinks resolved) sits inside one of the library folders."""
+    real = _real(path)
+    for d in _script_dirs():
+        root = _real(d)
+        try:
+            if os.path.commonpath([real, root]) == root and real != root:
+                return True
+        except ValueError:      # different drives
+            continue
+    return False
+
+
 def _resolve_script(script: str):
-    """A library script name, or a path to a .cs file. Returns (path, source) or raises."""
-    if os.path.isfile(script):
-        path = os.path.abspath(script)
-    else:
+    """A library script name, or a path to a .cs file inside a library folder. Returns
+    (path, source); raises FileNotFoundError or ValueError (with a message for the caller).
+
+    Only scripts resolved here get script_path in the request, and the host grants `// @unsafe`
+    and real-project writes only to those, so a path outside the library is refused."""
+    script = (script or "").strip()
+    if _SCRIPT_NAME.fullmatch(script):
         name = script[:-3] if script.endswith(".cs") else script
         path = None
         for d in _script_dirs():
             candidate = os.path.join(d, name + ".cs")
-            if os.path.isfile(candidate):
+            if os.path.isfile(candidate) and _in_script_dir(candidate):
                 path = candidate
                 break
             for f in os.listdir(d):
-                if f.endswith(".cs") and _parse_header(_read(os.path.join(d, f))).get("tool") == name:
+                if not f.endswith(".cs"):
+                    continue
+                try:
+                    tool = _parse_header(_read(os.path.join(d, f))).get("tool")
+                except ValueError:
+                    continue        # an undecodable neighbour must not hide the others
+                if tool == name and _in_script_dir(os.path.join(d, f)):
                     path = os.path.join(d, f)
                     break
             if path:
                 break
         if not path:
             raise FileNotFoundError(f"No script named '{script}'. See script_list().")
+    elif any(c in script for c in ("/", "\\", ":")):
+        if not script.lower().endswith(".cs"):
+            raise ValueError(f"A script path must name a .cs file: {script}")
+        if not os.path.isfile(script):
+            raise FileNotFoundError(f"No script file {script}.")
+        if not _in_script_dir(script):
+            raise ValueError(
+                f"{script} is not inside a script library folder ({', '.join(_script_dirs())}). "
+                "Save it there (or add the folder to EPLAN_MCP_SCRIPT_DIRS), or pass the source "
+                "as code=... instead.")
+        path = os.path.abspath(script)
+    else:
+        raise ValueError(f"Bad script name {script!r}: use letters, digits, '_', '.', '-', or a "
+                         "path to a .cs file in a script library folder.")
     return path, _read(path)
 
 
 def _read(path: str) -> str:
-    with open(path, encoding="utf-8") as f:
-        return f.read()
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except UnicodeDecodeError as e:
+        raise ValueError(f"{path} is not UTF-8 text ({e.reason} at byte {e.start}); "
+                         "save it as UTF-8.") from None
 
 
 def _write_json(path: str, data) -> None:
@@ -209,50 +264,132 @@ OFFLINE_DIR = os.environ.get("EPLAN_MCP_OFFLINE_DIR") or os.path.join(DOTNET_DIR
 OFFLINE_QUEUE = os.environ.get("EPLAN_MCP_OFFLINE_QUEUE") or os.path.join(
     os.path.expanduser("~"), ".eplan-mcp", "offline-queue")
 _OFFLINE_STATUS_FRESH_S = 15
+_OFFLINE_EXE = "EplanMcp.Host.Offline.exe"
+_OFFLINE_STOP_WAIT_S = 60.0
+_offline_lock = threading.Lock()
+
+
+def _pid_alive(pid: int) -> bool:
+    """True when `pid` is a running offline host (the image name guards against pid reuse)."""
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    handle = k32.OpenProcess(0x1000, False, int(pid))    # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    try:
+        code = wintypes.DWORD()
+        if not k32.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value != 259:  # STILL_ACTIVE
+            return False
+        buf = ctypes.create_unicode_buffer(1024)
+        size = wintypes.DWORD(len(buf))
+        if k32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+            return os.path.basename(buf.value).lower() == _OFFLINE_EXE.lower()
+        return True     # alive, name unreadable: assume it is ours rather than start a second host
+    finally:
+        k32.CloseHandle(handle)
+
+
+def _offline_host():
+    """(status dict, pid alive?) of the offline host; (None, False) when none is running.
+
+    The host's pid in status.json decides: a long run must never look like a dead host. A status
+    without a pid (older host) falls back to the heartbeat's age."""
+    path = os.path.join(OFFLINE_QUEUE, "status.json")
+    status = None
+    for _ in range(5):      # the host may be replacing the file right now (sharing violation)
+        if not os.path.isfile(path):
+            break
+        status = _read_json(path)
+        if isinstance(status, dict):
+            break
+        time.sleep(0.1)
+    if not isinstance(status, dict):
+        return None, False
+    pid = status.get("process_id")
+    if pid:
+        return (status, True) if _pid_alive(pid) else (None, False)
+    try:
+        fresh = time.time() - os.path.getmtime(path) < _OFFLINE_STATUS_FRESH_S
+    except OSError:
+        fresh = False
+    return (status, True) if fresh else (None, False)
 
 
 def _offline_status():
-    path = os.path.join(OFFLINE_QUEUE, "status.json")
-    if os.path.isfile(path) and time.time() - os.path.getmtime(path) < _OFFLINE_STATUS_FRESH_S:
-        return _read_json(path)
-    return None
+    """The running host's status, or None. A host told to stop counts as not running."""
+    status, _ = _offline_host()
+    if status and os.path.exists(os.path.join(OFFLINE_QUEUE, "stop")):
+        return None
+    return status
 
 
 def _offline_ensure(start_timeout: float = 180.0) -> dict:
-    """The running offline host's status, starting it when needed."""
-    status = _offline_status()
-    if status:
-        return status
-    exe = os.path.join(OFFLINE_DIR, "EplanMcp.Host.Offline.exe")
-    if not os.path.isfile(exe):
-        raise FileNotFoundError(f"Offline host not built: {exe}. Build dotnet/src/EplanMcp.Host.Offline (Release).")
-    os.makedirs(OFFLINE_QUEUE, exist_ok=True)
-    stop = os.path.join(OFFLINE_QUEUE, "stop")
-    if os.path.exists(stop):
-        os.remove(stop)
-    import subprocess
-    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    subprocess.Popen([exe, "--queue", OFFLINE_QUEUE], cwd=OFFLINE_DIR, creationflags=flags,
-                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    deadline = time.time() + start_timeout
-    while time.time() < deadline:
-        status = _offline_status()
-        if status:
+    """The running offline host's status, starting it when needed. Never starts a second host
+    while one is alive: a host still finishing after a stop request is waited for first."""
+    with _offline_lock:
+        stop = os.path.join(OFFLINE_QUEUE, "stop")
+        status, alive = _offline_host()
+        if alive and not os.path.exists(stop):
             return status
-        time.sleep(1)
-    raise TimeoutError("The offline host did not start within %d s (EPLAN license? check the EPLAN logs)."
-                       % start_timeout)
+        if alive:
+            deadline = time.time() + _OFFLINE_STOP_WAIT_S
+            while alive and time.time() < deadline:
+                time.sleep(1)
+                _, alive = _offline_host()
+            if alive:
+                raise TimeoutError("The offline host is stopping (a stop was requested) and is still "
+                                   "finishing a run; try again when it has exited.")
+        exe = os.path.join(OFFLINE_DIR, _OFFLINE_EXE)
+        if not os.path.isfile(exe):
+            raise FileNotFoundError(f"Offline host not built: {exe}. Build dotnet/src/EplanMcp.Host.Offline (Release).")
+        os.makedirs(OFFLINE_QUEUE, exist_ok=True)
+        for leftover in (stop, os.path.join(OFFLINE_QUEUE, "status.json")):
+            try:
+                os.remove(leftover)
+            except FileNotFoundError:
+                pass
+        import subprocess
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        subprocess.Popen([exe, "--queue", OFFLINE_QUEUE], cwd=OFFLINE_DIR, creationflags=flags,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        deadline = time.time() + start_timeout
+        while time.time() < deadline:
+            status = _offline_status()
+            if status:
+                return status
+            time.sleep(1)
+        raise TimeoutError("The offline host did not start within %d s (EPLAN license? check the EPLAN logs)."
+                           % start_timeout)
 
 
 def _invoke_offline(run_id: str, request_path: str, result_path: str, timeout: float) -> dict:
     _offline_ensure()
-    _write_json(os.path.join(OFFLINE_QUEUE, run_id + ".json"), {"request": request_path, "result": result_path})
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if os.path.isfile(result_path):
-            return {"success": True}
-        time.sleep(0.25)
-    return {"success": False, "message": "The offline host did not answer in time."}
+    queue_file = os.path.join(OFFLINE_QUEUE, run_id + ".json")
+    answered = False
+    try:
+        _write_json(queue_file, {"request": request_path, "result": result_path})
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if os.path.isfile(result_path):
+                answered = True
+                return {"success": True}
+            time.sleep(0.25)
+        return {"success": False, "message": "The offline host did not answer in time."}
+    finally:
+        if not answered:
+            # A run that timed out or failed must not start later, unseen, when the host gets to it.
+            try:
+                os.remove(queue_file)
+            except OSError:
+                pass
 
 
 def script_offline_stop() -> dict:
@@ -327,14 +464,19 @@ def script_hello(runtime: str = "auto") -> dict:
     Handshake with the script host: core version, protocol, features, EPLAN version, license and
     open projects. Call this first in a session; it also decides which runtime "auto" uses.
 
+    Changes nothing in a project, but it is not inert: it runs a tiny hello script inside EPLAN
+    (an add-in action or an ExecuteScript bootstrap), and runtime="offline" may start the offline
+    host process.
+
     Args:
-        runtime: "auto" (add-in if it answers, else bootstrap), "addin" or "bootstrap".
+        runtime: "auto" (add-in if it answers, else bootstrap), "addin", "bootstrap" or
+            "offline".
     """
     global _addin_ok
     if runtime == "offline":
         try:
             status = dict(_offline_ensure())
-        except (FileNotFoundError, TimeoutError) as e:
+        except OSError as e:     # not built, did not start, queue files locked
             return {"success": False, "runtime": "offline", "error": str(e)}
         status["success"] = status.get("protocol") == PROTOCOL
         return status
@@ -373,9 +515,16 @@ def script_run(code: str = None, script: str = None, args: dict = None, project:
     declare intent. A script that writes must say `// @writes true`; read-only runs reject EPLAN
     writes at compile time. Compile errors come back with your own line numbers and hints.
 
+    Real-project writes (not a scratch clone) need all of: the environment variable
+    EPLAN_MCP_ALLOW_REAL_PROJECT_WRITES=1 set for the server by a person (you cannot set it), a
+    saved library script, allow_real_project=True, and confirm=<confirm_code>. Show the
+    confirm_code and what the script will change to the user and get their approval before
+    passing it. The scratch-clone marker is a guard against mistakes, not a security boundary.
+
     Args:
         code: Script source (ad-hoc). Give either code or script.
-        script: A library script name (see script_list) or a .cs path.
+        script: A library script name (see script_list) or the path of a .cs file inside a
+            script library folder.
         args: Arguments for the script (ctx.Args).
         project: .elk path or project name to act on; default the focused or only open project.
         runtime: "auto", "addin", "bootstrap", or "offline" (EPLAN's offline API in a separate
@@ -385,18 +534,35 @@ def script_run(code: str = None, script: str = None, args: dict = None, project:
         dry_run: Sets ctx.DryRun; the script should report changes instead of making them.
         budget_seconds: Time limit enforced at each ctx.Budget.Check().
         wait_seconds: How long to wait before returning a run_id instead of the result.
-        allow_real_project: Allow writes to a non-scratch project (saved script + confirm only).
-        confirm: The confirm_code from a compile_only run of the same saved script.
+        allow_real_project: Allow writes to a non-scratch project (needs the server switch above,
+            a saved script and confirm).
+        confirm: The confirm_code from a compile_only run of the same saved script, shown to
+            and approved by the user.
         helpers: Extra .cs files compiled with the script.
     """
     if bool(code) == bool(script):
         return {"success": False, "error": "Give exactly one of code or script."}
     try:
         script_path, source = (None, code) if code else _resolve_script(script)
-    except FileNotFoundError as e:
+    except (FileNotFoundError, ValueError) as e:
         return {"success": False, "error": str(e)}
+    if script_path:
+        # A library script's run carries its privileges to every helper, so helpers must be
+        # library files too.
+        outside = [h for h in (helpers or []) if not (str(h).lower().endswith(".cs")
+                                                     and os.path.isfile(h) and _in_script_dir(h))]
+        if outside:
+            return {"success": False,
+                    "error": "helpers for a library script must be .cs files inside a script "
+                             "library folder: " + ", ".join(map(str, outside))}
 
     if allow_real_project and not compile_only:
+        if os.environ.get(REAL_PROJECT_SWITCH) != "1":
+            return {"success": False,
+                    "error": f"Real-project writes are switched off. A person must set the "
+                             f"environment variable {REAL_PROJECT_SWITCH}=1 for the MCP server "
+                             "process and restart it; the model cannot turn this on. Until then, "
+                             "write to a scratch clone (eplan_scratch_project_create)."}
         if not script_path:
             return {"success": False, "error": "Real-project writes need a saved script, not ad-hoc code."}
         # The host checks confirm against its own hash of source + helpers + these exact args.
@@ -417,13 +583,29 @@ def script_run(code: str = None, script: str = None, args: dict = None, project:
                  "deadline": time.time() + budget_seconds + 180}
         _jobs[run_id] = claim
 
+    started = False
     try:
-        chosen = _pick_runtime(runtime)
-    except Exception as e:  # noqa: BLE001 - surface any connection failure plainly
-        with _jobs_lock:
-            _jobs.pop(run_id, None)
-        return {"success": False, "error": f"Could not reach EPLAN: {e}"}
+        try:
+            chosen = _pick_runtime(runtime)
+        except Exception as e:  # noqa: BLE001 - surface any connection failure plainly
+            return {"success": False, "error": f"Could not reach EPLAN: {e}"}
+        job = _start_job(run_id, claim, chosen, runtime, source, script_path, args, project,
+                         compile_only, dry_run, allow_real_project, confirm, budget_seconds, helpers)
+        started = True
+    finally:
+        if not started:     # release the claim, or one failure blocks every later run
+            with _jobs_lock:
+                _jobs.pop(run_id, None)
+    job["thread"].join(timeout=max(0.0, wait_seconds))
+    out = script_status(run_id)
+    if compile_only and out.get("ok") and out.get("approval_hash"):
+        out["confirm_code"] = out["approval_hash"][:16]
+    return out
 
+
+def _start_job(run_id, claim, chosen, runtime, source, script_path, args, project, compile_only,
+               dry_run, allow_real_project, confirm, budget_seconds, helpers) -> dict:
+    """Write the request and start the run's thread. Returns the job."""
     folder = _new_run_folder(run_id)
     request_path = os.path.join(folder, "request.json")
     result_path = os.path.join(folder, "result.json")
@@ -452,21 +634,22 @@ def script_run(code: str = None, script: str = None, args: dict = None, project:
            "started": time.time(), "call": None, "deadline": claim["deadline"]}
 
     def work():
+        global _addin_ok
         try:
             job["call"] = _invoke(chosen, "run", folder, request_path, result_path,
                                   timeout=budget_seconds + 120)
         except Exception as e:  # noqa: BLE001
             job["call"] = {"success": False, "message": str(e)}
+        if runtime == "auto" and chosen == "addin" and not os.path.isfile(result_path):
+            # The add-in wrote nothing (unloaded, EPLAN restarted without it): ask again next
+            # run, which falls back to bootstrap. This run is not retried - it may have half-run.
+            _addin_ok = None
 
     job["thread"] = threading.Thread(target=work, name=f"script-{run_id}", daemon=True)
+    job["thread"].start()
     with _jobs_lock:
         _jobs[run_id] = job
-    job["thread"].start()
-    job["thread"].join(timeout=max(0.0, wait_seconds))
-    out = script_status(run_id)
-    if compile_only and out.get("ok") and out.get("approval_hash"):
-        out["confirm_code"] = out["approval_hash"][:16]
-    return out
+    return job
 
 
 def _is_busy(job: dict) -> bool:
@@ -543,7 +726,11 @@ def script_list() -> dict:
             if not f.endswith(".cs") or f.startswith("_"):
                 continue
             path = os.path.join(d, f)
-            h = _parse_header(_read(path))
+            try:
+                h = _parse_header(_read(path))
+            except ValueError as e:
+                scripts.append({"tool": f[:-3], "path": path, "error": str(e)})
+                continue
             scripts.append({"tool": h.get("tool") or f[:-3], "desc": h.get("desc"),
                             "args": h.get("args"), "writes": bool(h.get("writes")),
                             "needs": h.get("needs", "session"), "path": path})

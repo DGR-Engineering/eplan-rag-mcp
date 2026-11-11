@@ -41,6 +41,9 @@ import time
 
 SYMBOLS_PATH_SETTING = "USER.TrDMProject.Masterdata.Pathnames.Symbols"
 STATE_FILE = "symbols_redirect.json"
+# Scratch symbol copies live in their own folder under the scratch root, apart from scratch
+# projects, so purge can never reach anything else.
+SYMBOLS_SUBDIR = "symbols"
 DEFAULT_PREFIX = "symbols_scratch"
 SDB_EXT = ".sdb"
 
@@ -76,6 +79,17 @@ def _scratch_root() -> str:
         tempfile.gettempdir(), "eplan_mcp_scratch")
     os.makedirs(root, exist_ok=True)
     return root
+
+
+def _symbols_root() -> str:
+    root = os.path.join(_scratch_root(), SYMBOLS_SUBDIR)
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
+def _strictly_under(path, root):
+    """Inside root and not root itself."""
+    return _under(path, root) and _norm(path) != _norm(root)
 
 
 def _norm(p):
@@ -259,7 +273,8 @@ def scratch_symbols_create(name: str = None, libraries: list = None,
     scratch_symbols_restore.
 
     Args:
-        name: Scratch directory name under the scratch root. Default "<prefix>_<stamp>".
+        name: Directory name under the scratch root's "symbols" folder. Default
+            "<prefix>_<stamp>". Must stay strictly inside that folder.
         libraries: Absolute .slk paths to copy. Default: every library the preset's reader
             reports for the open project.
         reopen_project: Close and reopen the focused project afterwards (default True).
@@ -300,11 +315,14 @@ def scratch_symbols_create(name: str = None, libraries: list = None,
     if not libraries:
         return {"success": False, "error": "no libraries to copy - is a project open?"}
 
-    scratch_dir = os.path.join(
-        _scratch_root(),
-        name or ("%s_%s" % (p.get("dir_prefix") or DEFAULT_PREFIX, time.strftime("%Y%m%d_%H%M%S"))))
-    if not _under(scratch_dir, _scratch_root()):
-        return {"success": False, "error": "name must stay inside the scratch root: %r" % name}
+    root = _symbols_root()
+    if name is None:
+        name = "%s_%s" % (p.get("dir_prefix") or DEFAULT_PREFIX, time.strftime("%Y%m%d_%H%M%S"))
+    scratch_dir = os.path.normpath(os.path.join(root, name))
+    if not _strictly_under(scratch_dir, root):
+        return {"success": False,
+                "error": "name must be a directory strictly inside the scratch root's "
+                         "symbols folder (%s): %r" % (root, name)}
     os.makedirs(scratch_dir, exist_ok=True)
 
     copied = [_copy_library(slk, scratch_dir) for slk in libraries]
@@ -313,14 +331,20 @@ def scratch_symbols_create(name: str = None, libraries: list = None,
                 "error": "one or more libraries could not be copied; nothing was redirected",
                 "scratch_dir": scratch_dir, "libraries": copied}
 
-    set_err = _set_symbols_path(scratch_dir, setting)
-    if set_err:
-        return {"success": False, "error": set_err, "scratch_dir": scratch_dir,
-                "libraries": copied}
-
+    # Record the original BEFORE touching the setting: whatever happens next, restore can put
+    # it back.
     _write_state({"previous_symbols_path": previous, "scratch_dir": scratch_dir,
                   "created_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                   "libraries": [c["copied_slk"] for c in copied]})
+    set_err = _set_symbols_path(scratch_dir, setting)
+    if set_err:
+        current, _ = _get_symbols_path(setting)
+        if current is not None and _norm(current) == _norm(previous):
+            _clear_state()      # nothing changed; a stale record would block every later create
+        return {"success": False, "error": set_err, "scratch_dir": scratch_dir,
+                "libraries": copied,
+                "hint": None if not _read_state() else
+                "the setting may have changed; scratch_symbols_restore puts the recorded value back"}
 
     reopened = _reopen_focused_project(p) if reopen_project else None
     return {"success": True, "scratch_dir": scratch_dir, "previous_symbols_path": previous,
@@ -380,13 +404,16 @@ def scratch_symbols_restore(delete_scratch: bool = False, reopen_project: bool =
 def scratch_symbols_purge(prefix: str = None, preset: str = None) -> dict:
     """
     Delete orphaned scratch symbol directories left by earlier runs (each is a full library
-    copy). The directory of the currently recorded redirect is never touched. Read-only files
-    are cleared, so a "locked" entry means something really holds a file open.
+    copy). Only the scratch root's "symbols" folder is searched, so scratch projects and
+    anything else under the scratch root are never touched (copies an older version left
+    directly under the scratch root are not purged either; delete those by hand). The
+    directory of the currently recorded redirect is never touched. Read-only files are cleared,
+    so a "locked" entry means something really holds a file open.
 
     Args:
         prefix: Only directories whose name starts with this are considered (default: the
-            preset's dir_prefix, else "symbols_scratch"). "" means every directory under the
-            scratch root, which is deliberately not the default.
+            preset's dir_prefix, else "symbols_scratch"). "" means every directory in the
+            symbols folder, which is deliberately not the default.
         preset: Isolation preset (see scratch_symbols_create).
     """
     p, err = _preset(preset)
@@ -394,7 +421,7 @@ def scratch_symbols_purge(prefix: str = None, preset: str = None) -> dict:
         return err
     if prefix is None:
         prefix = p.get("dir_prefix") or DEFAULT_PREFIX
-    root = _scratch_root()
+    root = _symbols_root()
     protected = _norm((_read_state() or {}).get("scratch_dir"))
 
     deleted, locked, errors, skipped = [], [], [], []

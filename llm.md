@@ -124,16 +124,19 @@ It exposes **251 tools** (full tool-by-tool reference: [the project wiki](https:
   deploy-test loops), scratch project fixtures
   (`eplan_scratch_project_create` / `_discard` / `_list` — disposable clones
   of a template project; deletion is confined to the scratch root), an
-  add-in development loop driven by a manifest JSON (`eplan_addin_build`,
-  `eplan_addin_deploy`, `eplan_addin_update` - build, shut EPLAN down, deploy,
-  relaunch, verify the actions registered - and `eplan_list_addin_actions`, a
-  static scan of the add-in's C# for its action names), scratch symbol-library
+  add-in development loop driven by a manifest an extension registers by name
+  (`eplan_addin_build`, `eplan_addin_deploy`, `eplan_addin_update` - build,
+  shut EPLAN down, deploy, relaunch, verify the actions registered; deploy and
+  restart are opt-in, `do_deploy=True` / `restart=True`, only when the user
+  asked - and `eplan_list_addin_actions`, a static scan of the add-in's C# for
+  its action names), scratch symbol-library
   isolation (`eplan_scratch_symbols_create` / `_restore` / `_purge` /
   `_status` and `eplan_assert_isolation` - redirect $(MD_SYMBOLS) at copies so
   a symbol-writing test cannot reach the real libraries; the gate needs a
   library reader an extension registers), out-of-process UI Automation
   (`eplan_ui_drive`, `eplan_ui_dismiss_watch_start`,
   `eplan_ui_dismiss_watch_stop`: drive WinForms dialogs and arm a modal dismisser BEFORE a blocking action;
+  window lookups match EPLAN's own windows unless `process` names another;
   dialog presets come from extensions), and
   `eplan_get_system_messages` (read EPLAN's system message tree — the same
   errors/warnings the user sees in the GUI's system messages dialog).
@@ -312,9 +315,14 @@ All of these exist as `eplan_*` tools:
     the TARGET project is a scratch clone from `eplan_scratch_project_create`,
     and a writing script may touch only `ctx.Project` (no `ProjectManager`, no
     selection); other projects may stay open.
-    A real project needs a saved script, `allow_real_project=True` and the
-    `confirm_code` from a `compile_only=True` run of that script, approved by
-    the user. Read-only runs reject EPLAN writes at compile time.
+    A real project needs all of: `EPLAN_MCP_ALLOW_REAL_PROJECT_WRITES=1` in the
+    server's environment (a person sets it in the MCP config; you cannot), a
+    saved script in a script library folder, `allow_real_project=True`, and the
+    `confirm_code` from a `compile_only=True` run of that script. **Show the
+    `confirm_code` and what the script changes to the user and get their
+    approval before passing it.** The scratch marker is a guard against
+    mistakes, not a security boundary: a script is C# running in EPLAN.
+    Read-only runs reject EPLAN writes at compile time.
   - Compile errors come back with your own line numbers and "did you mean"
     hints; fix and re-run (a warm compile takes milliseconds). Use
     `compile_only=True` to check without running.

@@ -24,6 +24,7 @@ this module ships none.
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import uuid
@@ -36,6 +37,30 @@ OPS = ("list_windows", "wait_window", "dump", "set", "type", "click", "read",
 
 # name -> [{"title_regex", "button_name", ...}]
 _DIALOG_PRESETS = {}
+
+# Window lookups are limited to EPLAN's own process unless the caller names another ("" = any).
+DEFAULT_PROCESS = "EPLAN"
+
+# UiDrive.ps1 makes watch ids as [guid]::NewGuid().ToString('N').Substring(0, 12).
+_WATCH_ID = re.compile(r"[0-9a-f]{12}")
+
+
+def _scope_to_eplan(op: str, payload: dict) -> dict:
+    """Default the process filter to EPLAN wherever the caller set none, so a title regex never
+    matches (and clicks in) another application's window. An hwnd or pid is already exact."""
+    payload = dict(payload)
+    if op in ("list_windows", "wait_window"):
+        payload.setdefault("process", DEFAULT_PROCESS)
+    window = payload.get("window")
+    if isinstance(window, str) and not re.fullmatch(r"\s*\d+(\.\d+)?\s*", window):
+        # A bare caption, as UiDrive.ps1 would read it (escaped, so matched literally).
+        window = {"title_regex": re.escape(window)}
+    if isinstance(window, dict) and not window.get("hwnd") and not window.get("pid"):
+        window = dict(window)
+        window.setdefault("process", DEFAULT_PROCESS)
+    if window is not None:
+        payload["window"] = window
+    return payload
 
 
 def _check_rules(rules):
@@ -73,6 +98,16 @@ def _run(op: str, payload: dict, timeout: float, driver: str = None) -> dict:
     cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
            "-File", driver, "-Op", op, "-ArgsFile", argf]
     try:
+        return _call(op, cmd, timeout)
+    finally:
+        try:
+            os.remove(argf)
+        except OSError:
+            pass
+
+
+def _call(op: str, cmd: list, timeout: float) -> dict:
+    try:
         # encoding/errors are load-bearing: captions carry Unicode the cp1252 default reader
         # raises on, which kills the capture thread and hands back stdout=None.
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
@@ -81,10 +116,9 @@ def _run(op: str, payload: dict, timeout: float, driver: str = None) -> dict:
         return {"success": False, "op": op,
                 "error": "Driver exceeded the host timeout of %ss. Every driver op is itself "
                          "bounded - a host-level timeout means the PowerShell process hung, not "
-                         "that a wait elapsed." % timeout,
-                "args_file": argf}
+                         "that a wait elapsed." % timeout}
     except Exception as e:
-        return {"success": False, "op": op, "error": str(e), "args_file": argf}
+        return {"success": False, "op": op, "error": str(e)}
 
     out = (proc.stdout or "").strip()
     try:
@@ -92,7 +126,7 @@ def _run(op: str, payload: dict, timeout: float, driver: str = None) -> dict:
     except Exception as e:
         return {"success": False, "op": op, "error": "Driver emitted non-JSON: %s" % e,
                 "exit_code": proc.returncode, "stdout": out[-2000:],
-                "stderr": (proc.stderr or "")[-2000:], "args_file": argf}
+                "stderr": (proc.stderr or "")[-2000:]}
     if not isinstance(result, dict):
         return {"success": False, "op": op,
                 "error": "Driver emitted a %s, not an object" % type(result).__name__,
@@ -100,7 +134,6 @@ def _run(op: str, payload: dict, timeout: float, driver: str = None) -> dict:
     result.setdefault("success", False)
     result.setdefault("op", op)
     if not result.get("success"):
-        result.setdefault("args_file", argf)
         if proc.stderr:
             result.setdefault("stderr", proc.stderr[-1500:])
     return result
@@ -143,6 +176,10 @@ def ui_drive(op: str, args: dict = None, timeout_s: float = 180) -> dict:
       {"title_regex": "...", "class_regex"?: "...", "pid"?: N, "process"?: "..."}.
       Lookups start at the desktop root, so owner-less dialogs behind EPLAN are found.
 
+    PROCESS SCOPE: list_windows, wait_window and every window spec without hwnd or pid match
+      only EPLAN's own windows (process "EPLAN") unless args set "process" - another process
+      name, or "" for every process. Keep that in mind when list_windows asserts "no dialog".
+
     SELECTOR: {"by": "automationId"|"name"|"class"|"index", "value": "...", "type"?: "Button"|...}
       "value" is a REGEX - anchor it (^...$) or "Close" also matches "Close All".
 
@@ -159,7 +196,7 @@ def ui_drive(op: str, args: dict = None, timeout_s: float = 180) -> dict:
     if op not in OPS:
         return {"success": False,
                 "error": "Unknown op %r. Choose from: %s" % (op, ", ".join(OPS))}
-    return _run(op, args or {}, timeout_s)
+    return _run(op, _scope_to_eplan(op, args or {}), timeout_s)
 
 
 def ui_dismiss_watch_start(rules: list = None, timeout_s: float = 300,
@@ -174,8 +211,9 @@ def ui_dismiss_watch_start(rules: list = None, timeout_s: float = 300,
     failing it, so prefer a preset that covers every known caption.
 
     Args:
-        rules: [{"title_regex": "...", "button_name": "..."}]. Both are regexes (anchor them);
-            button_name matches Button controls by name. Each window is acted on at most once.
+        rules: [{"title_regex": "...", "button_name": "...", "process"?: "..."}]. Both are
+            regexes (anchor them); button_name matches Button controls by name. Each window is
+            acted on at most once. A rule watches EPLAN's windows unless it names a process.
         timeout_s: Self-termination deadline for the watcher (default 300).
         preset: Name of a rule set an extension registered. Your rules are matched FIRST, so a
             preset never overrides a deliberate choice.
@@ -195,6 +233,7 @@ def ui_dismiss_watch_start(rules: list = None, timeout_s: float = 300,
     err = _check_rules(rules)
     if err:
         return {"success": False, "error": err}
+    rules = [r if r.get("process") else dict(r, process=DEFAULT_PROCESS) for r in rules]
     # Starting only spawns the detached watcher, but on a CPU-starved machine the PowerShell host
     # alone has taken over 60 s to come up.
     return _run("dismiss_watch", {"mode": "start", "rules": rules, "timeout_s": timeout_s},
@@ -215,7 +254,9 @@ def ui_dismiss_watch_stop(watch_id: str, status_only: bool = False) -> dict:
         {"success": True, "count": N, "still_running": bool,
          "dismissed": [{at, hwnd, title, class, rule, button, result}]}
     """
-    if not watch_id:
-        return {"success": False, "error": "watch_id is required"}
+    if not isinstance(watch_id, str) or not _WATCH_ID.fullmatch(watch_id):
+        return {"success": False,
+                "error": "watch_id must be the 12 lowercase hex characters "
+                         "ui_dismiss_watch_start returned; got %r" % (watch_id,)}
     return _run("dismiss_watch", {"mode": "status" if status_only else "stop",
                                   "watch_id": watch_id}, timeout=180)

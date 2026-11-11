@@ -168,7 +168,7 @@ eplan_ping	read
 eplan_plc_export	-
 eplan_plc_import	-
 eplan_prepare_macros	-
-eplan_preview_page	read
+eplan_preview_page	-
 eplan_print_pages	-
 eplan_print_project	-
 eplan_profile_forget	-

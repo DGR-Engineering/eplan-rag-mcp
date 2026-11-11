@@ -44,7 +44,7 @@ def env(tmp_path, monkeypatch):
 def test_create_copies_redirects_and_passes_the_gate(env):
     r = iso.scratch_symbols_create(name="symbols_scratch_a")
     assert r["success"], r
-    d = env["scratch"] / "symbols_scratch_a"
+    d = env["scratch"] / "symbols" / "symbols_scratch_a"
     assert (d / "Lib.slk").exists() and (d / "Lib.sdb" / "sym.xml").exists()
     assert not (d / "Lib.sdb" / "busy.lck").exists()
     assert env["setting"]["value"] == str(d)
@@ -61,7 +61,7 @@ def test_second_create_is_refused_and_restore_puts_the_value_back(env):
     assert st["redirect_active"] and st["redirect_recorded"]
     r = iso.scratch_symbols_restore(delete_scratch=True)
     assert r["restored"] and env["setting"]["value"] == str(env["prod"])
-    assert not (env["scratch"] / "symbols_scratch_a").exists()
+    assert not (env["scratch"] / "symbols" / "symbols_scratch_a").exists()
     assert iso.scratch_symbols_restore()["restored"] is False
 
 
@@ -86,17 +86,40 @@ def test_create_without_a_reader_needs_explicit_libraries(env, monkeypatch):
 
 
 def test_name_cannot_escape_the_scratch_root(env):
-    r = iso.scratch_symbols_create(name="..\\..\\evil")
-    assert not r["success"] and "scratch root" in r["error"]
+    for name in ("..\\..\\evil", ".", "", "..", "x\\.."):
+        r = iso.scratch_symbols_create(name=name)
+        assert not r["success"] and "scratch root" in r["error"], name
+    assert env["setting"]["value"] == str(env["prod"]) and iso._read_state() is None
 
 
 def test_purge_spares_the_active_redirect(env):
     assert iso.scratch_symbols_create(name="symbols_scratch_live")["success"]
-    (env["scratch"] / "symbols_scratch_old").mkdir()
-    (env["scratch"] / "other").mkdir()
+    (env["scratch"] / "symbols" / "symbols_scratch_old").mkdir()
+    (env["scratch"] / "symbols" / "other").mkdir()
+    (env["scratch"] / "symbols_scratch_project").mkdir()   # beside scratch projects: not ours
     r = iso.scratch_symbols_purge()
     assert [os.path.basename(p) for p in r["deleted"]] == ["symbols_scratch_old"]
-    assert r["skipped"] and (env["scratch"] / "other").exists()
+    assert r["skipped"] and (env["scratch"] / "symbols" / "other").exists()
+    iso.scratch_symbols_purge(prefix="")
+    assert (env["scratch"] / "symbols_scratch_project").exists()
+
+
+def test_state_is_written_before_the_setting_changes(env, monkeypatch):
+    seen = []
+    real_set = scripted.settings_set_string
+
+    def spy(path, v):
+        seen.append(iso._read_state())
+        return real_set(path, v)
+    monkeypatch.setattr(scripted, "settings_set_string", spy)
+    assert iso.scratch_symbols_create(name="symbols_scratch_s")["success"]
+    assert seen[0]["previous_symbols_path"] == str(env["prod"])
+
+
+def test_failed_redirect_that_changed_nothing_leaves_no_record(env, monkeypatch):
+    monkeypatch.setattr(scripted, "settings_set_string", lambda path, v: {"success": False})
+    r = iso.scratch_symbols_create(name="symbols_scratch_f")
+    assert not r["success"] and iso._read_state() is None
 
 
 def test_unknown_preset_is_refused(env):

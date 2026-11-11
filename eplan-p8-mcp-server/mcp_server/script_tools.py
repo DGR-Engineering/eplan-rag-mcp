@@ -11,14 +11,21 @@ Header -> tool:
     // @tool   name          tool name (prefixed with the library's prefix, "eplan_" for the public one)
     // @desc   ...           description
     // @arg    name type [optional|required] [default=x] description
-    // @writes true|false    false gives the tool readOnlyHint; true leaves it "may write"
+    // @writes true|false    only an explicit `false` (and no @unsafe) gives the tool readOnlyHint
+
+The run parameters project, dry_run, budget_seconds and wait_seconds are reserved; a script that
+declares an @arg with one of those names is skipped (with a message on stderr), as is one whose
+header cannot be read or turned into a tool. One bad script never stops the server.
 """
 
 import inspect
 import os
+import sys
 import types
 
 from api.actions import scripthost
+
+RESERVED = ("project", "dry_run", "budget_seconds", "wait_seconds")
 
 _TYPES = {"string": str, "int": int, "number": float, "bool": bool, "list": list, "enum": str}
 
@@ -47,6 +54,10 @@ def _parse_arg(spec: str) -> dict:
 def make_tool(path: str, header: dict):
     """A plain function whose signature mirrors the script's @arg lines."""
     args = [_parse_arg(a) for a in header.get("args", [])]
+    reserved = [a["name"] for a in args if a["name"] in RESERVED]
+    if reserved:
+        raise ValueError("@arg %s is reserved for the run itself (%s)"
+                         % (", ".join(reserved), ", ".join(RESERVED)))
     params = []
     for a in args:
         py_type = _TYPES.get(a["type"], str)
@@ -76,7 +87,9 @@ def make_tool(path: str, header: dict):
     lines.append(f"\nScript: {path}")
     tool.__doc__ = "\n".join(lines)
     tool.__name__ = header.get("tool") or "script"
-    tool.__mcp_annotations__ = {} if header.get("writes") else {"readOnlyHint": True}
+    # Read-only only on an explicit `@writes false`: a missing header line means "may write".
+    read_only = header.get("writes") is False and "unsafe" not in header
+    tool.__mcp_annotations__ = {"readOnlyHint": True} if read_only else {}
     return tool
 
 
@@ -88,7 +101,11 @@ def library():
         for f in sorted(os.listdir(d)):
             if f.endswith(".cs") and not f.startswith("_"):
                 path = os.path.join(d, f)
-                header = scripthost._parse_header(scripthost._read(path))
+                try:
+                    header = scripthost._parse_header(scripthost._read(path))
+                except Exception as e:  # noqa: BLE001 - one bad script must not stop the server
+                    print("eplan-mcp: skipping script %s: %s" % (path, e), file=sys.stderr)
+                    continue
                 if header.get("tool"):
                     out.append((prefix, path, header))
     return out
@@ -107,7 +124,12 @@ def register(app, registry, mode, register_fn):
         ns = by_prefix.setdefault(prefix, types.SimpleNamespace(__all__=[]))
         if f"{prefix}{name}" in taken or name in ns.__all__:
             continue          # a real tool of that name wins; never shadow one
-        setattr(ns, name, make_tool(path, header))
+        try:
+            tool = make_tool(path, header)
+        except Exception as e:  # noqa: BLE001 - bad @arg lines: skip this script, keep the rest
+            print("eplan-mcp: skipping script %s: %s" % (path, e), file=sys.stderr)
+            continue
+        setattr(ns, name, tool)
         ns.__all__.append(name)
         registered.append(f"{prefix}{name}")
     # Full mode has no search tool, so an unpublished tool there would be unreachable: index only

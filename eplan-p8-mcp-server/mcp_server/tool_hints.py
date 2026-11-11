@@ -15,7 +15,7 @@ is always reviewed.
 """
 
 READ_ONLY_PREFIXES = (
-    "get_", "list_", "read_", "query_", "search_", "describe", "inspect", "preview_",
+    "get_", "list_", "read_", "query_", "search_", "describe", "inspect",
     "verify_actions", "versions", "servers", "status", "ping", "catalog",
     "settings_get_", "pathmap_", "api_types", "api_describe", "action_catalog", "action_describe",
     "ribbon_catalog", "dialog_history", "profile_get", "profile_list", "profile_suggest",

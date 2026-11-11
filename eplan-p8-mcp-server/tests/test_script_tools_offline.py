@@ -45,8 +45,39 @@ def test_published_tools_mirror_the_header(tmp_path, monkeypatch):
     props = count.parameters["properties"]
     assert set(props) >= {"page", "limit", "project", "dry_run"}
     assert "limit" in count.parameters.get("required", [])
-    assert count.annotations.readOnlyHint is True             # no @writes: read-only
+    assert count.annotations is None                          # no @writes line: may write
     assert app._tool_manager._tools["acme_fix_things"].annotations is None   # writes: no hint
+
+
+def test_read_only_needs_an_explicit_writes_false_and_no_unsafe(tmp_path, monkeypatch):
+    lib = _lib(tmp_path, monkeypatch)
+    (lib / "ro.cs").write_text("// @tool ro\n// @writes false\nreturn 1;", encoding="utf-8")
+    (lib / "ro_unsafe.cs").write_text("// @tool ro_unsafe\n// @writes false\n// @unsafe\nreturn 1;",
+                                      encoding="utf-8")
+    monkeypatch.setenv("EPLAN_MCP_SCRIPT_TOOLS", "publish")
+    app, reg = FastMCP("t"), ToolRegistry()
+    script_tools.register(app, reg, "full", server.register_actions)
+    tools = app._tool_manager._tools
+    assert tools["acme_ro"].annotations.readOnlyHint is True
+    assert tools["acme_ro_unsafe"].annotations is None
+
+
+def test_a_bad_script_is_skipped_not_fatal(tmp_path, monkeypatch, capsys):
+    lib = _lib(tmp_path, monkeypatch)
+    (lib / "binary.cs").write_bytes(b"// @tool binary\n\xff\xfe")
+    (lib / "badarg.cs").write_text("// @tool badarg\n// @arg 1x string\nreturn 1;", encoding="utf-8")
+    (lib / "dup.cs").write_text("// @tool dup\n// @arg a string\n// @arg a int\nreturn 1;",
+                                encoding="utf-8")
+    (lib / "clash.cs").write_text("// @tool clash\n// @arg project string\nreturn 1;", encoding="utf-8")
+    monkeypatch.setenv("EPLAN_MCP_SCRIPT_TOOLS", "publish")
+    app, reg = FastMCP("t"), ToolRegistry()
+    names = script_tools.register(app, reg, "full", server.register_actions)
+    assert "acme_count_pages" in names
+    for bad in ("acme_binary", "acme_badarg", "acme_dup", "acme_clash"):
+        assert bad not in names
+    err = capsys.readouterr()
+    assert "binary.cs" in err.err and "clash.cs" in err.err and "reserved" in err.err
+    assert "skipping" not in err.out
 
 
 def test_published_tool_calls_script_run_with_the_args(tmp_path, monkeypatch):

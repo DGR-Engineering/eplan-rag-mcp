@@ -27,7 +27,8 @@ def repo(tmp_path, monkeypatch):
     path = tmp_path / "presets" / "addins.json"
     path.write_text(json.dumps(manifest), encoding="utf-8")
     monkeypatch.setattr(addin_dev, "_MANIFESTS", {})
-    return tmp_path, str(path)
+    ext.register_addin_manifest("acme", str(path))
+    return tmp_path, "acme"
 
 
 def _fake_run(calls, returncode=0, stdout=""):
@@ -38,7 +39,7 @@ def _fake_run(calls, returncode=0, stdout=""):
 
 
 def test_unknown_manifest_names_the_registered_ones(repo):
-    ext.register_addin_manifest("mine", repo[1])
+    ext.register_addin_manifest("mine", str(repo[0] / "presets" / "addins.json"))
     r = addin_dev.addin_build("nope")
     assert not r["success"] and "mine" in r["error"]
 
@@ -47,7 +48,7 @@ def test_build_resolves_paths_against_the_manifest_root(repo, monkeypatch):
     calls = []
     monkeypatch.setattr(addin_dev.subprocess, "run",
                         _fake_run(calls, stdout="Build succeeded.\nnoise\n"))
-    ext.register_addin_manifest("mine", repo[1])
+    ext.register_addin_manifest("mine", str(repo[0] / "presets" / "addins.json"))
     r = addin_dev.addin_build("mine")
     assert r["success"] and r["configuration"] == "Release"
     assert r["projects"]["A"]["output"] == ["Build succeeded."]
@@ -104,17 +105,17 @@ def _lifecycle(monkeypatch, shutdown_ok=True):
 
 def test_update_shuts_down_before_deploying_and_verifies_the_manifest_list(repo, monkeypatch):
     seen = _lifecycle(monkeypatch)
-    m = json.loads(open(repo[1], encoding="utf-8").read())
+    m = json.loads(open(repo[0] / "presets" / "addins.json", encoding="utf-8").read())
     m["root"] = str(repo[0])
     m["verify_actions"] = ["Acme_Run"]
-    r = addin_dev.addin_update(m, do_build=False)
+    r = addin_dev.addin_update(m, do_build=False, restart=True, do_deploy=True)
     assert r["success"], r
     assert seen == ["shutdown", "deploy", "launch", ("verify", ["Acme_Run"])]
 
 
 def test_update_does_not_deploy_when_shutdown_fails(repo, monkeypatch):
     seen = _lifecycle(monkeypatch, shutdown_ok=False)
-    r = addin_dev.addin_update(repo[1], do_build=False)
+    r = addin_dev.addin_update(repo[1], do_build=False, restart=True, do_deploy=True)
     assert not r["success"] and "deploy" not in seen
 
 
@@ -130,3 +131,29 @@ def test_deploying_tools_carry_a_destructive_hint():
         assert tool_hints.annotations_for("eplan_" + f.__name__, f, "eplan_")["destructiveHint"]
     assert tool_hints.annotations_for("eplan_list_addin_actions",
                                       addin_dev.list_addin_actions, "eplan_")["readOnlyHint"]
+
+
+def test_published_tools_refuse_a_manifest_path(repo, monkeypatch):
+    monkeypatch.setattr(addin_dev.subprocess, "run", lambda *a, **k: pytest.fail("ran"))
+    path = str(repo[0] / "presets" / "addins.json")
+    for r in (addin_dev.addin_build(path), addin_dev.addin_deploy(path),
+              addin_dev.addin_update(path), addin_dev.list_addin_actions(manifest=path)):
+        assert not r["success"] and "registered manifest name" in r["error"]
+    m, err = addin_dev.load_manifest_file(path)     # still open to extension code
+    assert err is None and m["projects"] == {"A": "src/A/A.csproj"}
+
+
+def test_update_neither_deploys_nor_restarts_by_default(repo, monkeypatch):
+    seen = _lifecycle(monkeypatch)
+    r = addin_dev.addin_update(repo[1], do_build=False)
+    assert r["success"] and "deploy" not in seen and "shutdown" not in seen and "launch" not in seen
+    import inspect
+    sig = inspect.signature(addin_dev.addin_update)
+    assert sig.parameters["do_deploy"].default is False and sig.parameters["restart"].default is False
+    assert "CAN DEPLOY AND RESTART EPLAN" in addin_dev.addin_update.__doc__
+
+
+def test_build_is_not_read_only():
+    import tool_hints
+    assert tool_hints.annotations_for("eplan_addin_build", addin_dev.addin_build,
+                                      "eplan_") == {"readOnlyHint": False}
