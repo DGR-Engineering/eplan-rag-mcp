@@ -16,8 +16,8 @@ Two runtimes run the SAME scripts:
 Both need the EPLAN API developer license (the host is unsigned). `runtime="auto"` uses the
 add-in when it answers EplanMcp_Hello, else the bootstrap.
 
-Writes (D7): ad-hoc scripts may write only when every open project is a scratch clone made by
-scratch_project_create (it leaves a marker file). A real project needs a SAVED script,
+Writes (D7): ad-hoc scripts may write only when the TARGET project is a scratch clone made by
+scratch_project_create (it leaves a marker file), and a writing script may touch only ctx.Project. A real project needs a SAVED script,
 allow_real_project=True, and confirm=<the confirm_code a compile_only run of the same script, args
 and helpers returned>; take a backup first (eplan_backup_project). This is a guard against mistakes, not a sandbox: a script is C# running in EPLAN.
 

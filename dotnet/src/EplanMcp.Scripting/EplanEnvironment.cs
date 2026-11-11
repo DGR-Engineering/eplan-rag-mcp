@@ -71,14 +71,17 @@ namespace EplanMcp.Scripting
                 if (_project == null && resolveError != null) pre.Warnings.Add(resolveError);
                 pre.Project = _project?.ProjectLinkFilePath;
 
-                // D7: ad-hoc code writes only when EVERY open project is a marked scratch clone (a
-                // script can reach any open project). A real project takes a saved script, the
-                // explicit flag, and a confirmation equal to the source hash the user was shown.
-                var notScratch = _openBefore.Where(p => !ScratchMarker.IsScratch(p, out _)).ToList();
-                if (_openBefore.Length > 0 && notScratch.Count == 0)
+                // D7: ad-hoc code may write when the TARGET project is a marked scratch clone. The
+                // safety check keeps a writing script on ctx.Project (no ProjectManager, no
+                // selection), and Verify refuses a run that changed which projects are open. A real
+                // project takes a saved script, the explicit flag, and a confirmation equal to the
+                // approval hash (source + helpers + args) the user was shown.
+                string scratchWhy = "";
+                bool targetIsScratch = _project != null && ScratchMarker.IsScratch(_project.ProjectLinkFilePath, out scratchWhy);
+                if (targetIsScratch)
                 {
                     pre.WriteAllowed = true;
-                    pre.Gate = "all open projects are scratch clones";
+                    pre.Gate = "the target project is a scratch clone";
                 }
                 else if (_req.AllowRealProject && !string.IsNullOrEmpty(_req.ScriptPath)
                          && !string.IsNullOrEmpty(_req.Confirm) && sourceHash.StartsWith(_req.Confirm!, StringComparison.OrdinalIgnoreCase)
@@ -90,9 +93,9 @@ namespace EplanMcp.Scripting
                 else
                 {
                     pre.WriteAllowed = false;
-                    pre.Gate = _openBefore.Length == 0
-                        ? "no project is open"
-                        : "not every open project is a scratch clone (" + string.Join(", ", notScratch.Select(Path.GetFileName)) +
+                    pre.Gate = _project == null
+                        ? "no target project"
+                        : "the target project " + Path.GetFileName(_project.ProjectLinkFilePath) + " is not a scratch clone (" + scratchWhy +
                           "). Writes to a real project need a saved script, allow_real_project and the confirmation code.";
                 }
                 return pre;

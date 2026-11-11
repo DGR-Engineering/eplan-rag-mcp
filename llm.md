@@ -297,8 +297,10 @@ All of these exist as `eplan_*` tools:
   - Call `eplan_script_hello` once first: it reports the host version, which
     runtime answers (`addin`, else `bootstrap`), the EPLAN version and the
     license. Both runtimes need the EPLAN API developer license.
-  - **Writes:** declare `// @writes true`. Ad-hoc scripts may write only while
-    every open project is a scratch clone from `eplan_scratch_project_create`.
+  - **Writes:** declare `// @writes true`. Ad-hoc scripts may write only when
+    the TARGET project is a scratch clone from `eplan_scratch_project_create`,
+    and a writing script may touch only `ctx.Project` (no `ProjectManager`, no
+    selection); other projects may stay open.
     A real project needs a saved script, `allow_real_project=True` and the
     `confirm_code` from a `compile_only=True` run of that script, approved by
     the user. Read-only runs reject EPLAN writes at compile time.

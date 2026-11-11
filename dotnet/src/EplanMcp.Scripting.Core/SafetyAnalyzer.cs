@@ -36,8 +36,18 @@ namespace EplanMcp.Scripting.Core
             "Generate", "Renumber", "Translate", "Synchronize", "Upgrade", "Reset", "DockText",
         };
 
+        /// <summary>Ways to reach a project other than ctx.Project. A writing script may not use
+        /// them: the write gate checks only the TARGET project is a scratch clone, so a writing
+        /// script must stay inside it (D7).</summary>
+        private static readonly string[] OtherProjectTypes =
+        {
+            "Eplan.EplApi.DataModel.ProjectManager",
+            "Eplan.EplApi.HEServices.SelectionSet",
+        };
+
         /// <param name="readOnly">True when the run may not write: no assignments to EPLAN
-        /// properties and no EPLAN method whose name starts with a write verb.</param>
+        /// properties and no EPLAN method whose name starts with a write verb. False (a writing
+        /// run): the script may not reach any project but ctx.Project.</param>
         public static List<Diag> Check(CSharpCompilation compilation, bool readOnly, bool allowUnsafe)
         {
             var found = new List<Diag>();
@@ -66,6 +76,21 @@ namespace EplanMcp.Scripting.Core
                         var owner = target?.ContainingType?.ToDisplayString() ?? "";
                         if ((target is IPropertySymbol || target is IFieldSymbol) && IsEplan(owner) && !IsHarmlessSetting(owner, target!.Name))
                             found.Add(Make("EMCP002", asg, $"Assigning {owner}.{target!.Name} is a write, and this run is read-only."));
+                    }
+                }
+
+                if (!readOnly && !allowUnsafe)
+                {
+                    foreach (var name in root.DescendantNodes().OfType<SimpleNameSyntax>())
+                    {
+                        var sym = model.GetSymbolInfo(name).Symbol;
+                        var type = sym as ITypeSymbol ?? sym?.ContainingType;
+                        var full = type?.ToDisplayString() ?? "";
+                        if (OtherProjectTypes.Contains(full))
+                        {
+                            found.Add(Make("EMCP004", name, $"A writing script may only touch ctx.Project; {full} can reach other open projects. Use ctx.Project."));
+                            break;
+                        }
                     }
                 }
 

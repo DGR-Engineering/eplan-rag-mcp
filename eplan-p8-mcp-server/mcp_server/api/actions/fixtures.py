@@ -23,7 +23,7 @@ import time
 
 from ._base import _get_connected_manager
 
-# The script host lets ad-hoc scripts write only when every open project carries this
+# The script host lets ad-hoc scripts write only when the target project carries this
 # marker (dotnet/src/EplanMcp.Scripting/ScratchMarker.cs reads it). A marker names its own
 # link file, so one copied next to a real project does not count.
 SCRATCH_MARKER_SUFFIX = ".eplanmcp-scratch"

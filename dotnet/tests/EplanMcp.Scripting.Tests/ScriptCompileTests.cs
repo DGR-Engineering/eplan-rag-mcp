@@ -75,5 +75,19 @@ namespace EplanMcp.Scripting.Tests
             var safety = SafetyAnalyzer.Check(compiled.Compilation!, readOnly: true, allowUnsafe: false);
             Assert.Contains(safety, d => d.Id == "EMCP002");
         }
+
+        [Fact]
+        public void Writing_script_may_not_reach_other_projects()
+        {
+            var bin = EplanBin();
+            const string src = "// @writes true\nvar all = new ProjectManager().OpenProjects;\nreturn all.Length;";
+            var refs = ReferenceSet.FromPaths(Directory.GetFiles(bin, "Eplan.EplApi.*Netu.dll")
+                .Concat(new[] { typeof(ScriptArgs).Assembly.Location }));
+            var compiled = ScriptCompiler.Compile(SourceComposer.Compose(src, "p.cs", EplanEnvironment.DefaultSnippets), "p.cs",
+                Array.Empty<(string, string)>(), refs, "check_other_projects");
+            Assert.True(compiled.Success);
+            Assert.Contains(SafetyAnalyzer.Check(compiled.Compilation!, readOnly: false, allowUnsafe: false), d => d.Id == "EMCP004");
+            Assert.DoesNotContain(SafetyAnalyzer.Check(compiled.Compilation!, readOnly: true, allowUnsafe: false), d => d.Id == "EMCP004");
+        }
     }
 }
