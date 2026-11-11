@@ -2,7 +2,7 @@
 
 Measured 2026-11-10 on one Windows PC with an EPLAN API developer license (Electric P8 Premium),
 script host core 0.1.0, runtime **bootstrap** (`ExecuteScript`, host loaded from bytes). The
-target was a scratch clone of a production-size schematic project, opened alone.
+target was a scratch clone of a mid-size schematic project, opened alone.
 
 | Check | Result |
 |---|---|
