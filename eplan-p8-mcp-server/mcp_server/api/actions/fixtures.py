@@ -14,12 +14,34 @@ template must not be open in EPLAN during cloning (EPLAN locks files inside
 the .edb directory).
 """
 
+import json
 import os
+import secrets
 import shutil
 import tempfile
 import time
 
 from ._base import _get_connected_manager
+
+# The script host lets ad-hoc scripts write only when every open project carries this
+# marker (dotnet/src/EplanMcp.Scripting/ScratchMarker.cs reads it). A marker names its own
+# link file, so one copied next to a real project does not count.
+SCRATCH_MARKER_SUFFIX = ".eplanmcp-scratch"
+SCRATCH_MARKER_KIND = "eplan-mcp-scratch"
+
+
+def _write_scratch_marker(elk_path: str, template: str) -> str:
+    marker = elk_path + SCRATCH_MARKER_SUFFIX
+    with open(marker, "w", encoding="utf-8") as f:
+        json.dump({
+            "kind": SCRATCH_MARKER_KIND,
+            "version": 1,
+            "nonce": secrets.token_hex(16),
+            "project_link": os.path.abspath(elk_path),
+            "template": template,
+            "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }, f)
+    return marker
 
 
 def _rmtree_writable(path):
@@ -177,9 +199,10 @@ def scratch_project_create(template_project: str, name: str = None,
     try:
         shutil.copy2(src_elk, dst_elk)
         shutil.copytree(src_edb, dst_edb)
+        _write_scratch_marker(dst_elk, src_elk)
     except Exception as e:
         # Clean up a half-copied clone.
-        for p in (dst_elk,):
+        for p in (dst_elk, dst_elk + SCRATCH_MARKER_SUFFIX):
             if os.path.exists(p):
                 try:
                     os.remove(p)
@@ -240,7 +263,8 @@ def scratch_project_discard(project_path: str, close_first: bool = True) -> dict
     # clone can be closed and discarded again. Handles can lag a close, so
     # retry briefly on PermissionError.
     errors = []
-    for path, remover in ((edb, _rmtree_writable), (elk, os.remove)):
+    for path, remover in ((edb, _rmtree_writable), (elk, os.remove),
+                          (elk + SCRATCH_MARKER_SUFFIX, os.remove)):
         if not os.path.exists(path):
             continue
         for attempt in range(5):

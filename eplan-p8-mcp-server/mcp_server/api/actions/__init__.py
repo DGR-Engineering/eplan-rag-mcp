@@ -315,6 +315,15 @@ from .fixtures import (
     scratch_project_list,
 )
 
+# Script host (typed C# scripts compiled and run inside EPLAN; see dotnet/)
+from .scripthost import (
+    script_hello,
+    script_run,
+    script_status,
+    script_cancel,
+    script_list,
+)
+
 # Dialogs (list/click EPLAN windows from Windows, works while EPLAN is blocked)
 from .dialogs import (
     list_dialogs,
@@ -524,6 +533,8 @@ __all__ = [
     'app_launch', 'app_shutdown', 'app_restart',
     # Scratch fixtures
     'scratch_project_create', 'scratch_project_discard', 'scratch_project_list',
+    # Script host
+    'script_hello', 'script_run', 'script_status', 'script_cancel', 'script_list',
     # Dialogs
     'list_dialogs', 'click_dialog_button', 'dialog_history',
     # Discovery

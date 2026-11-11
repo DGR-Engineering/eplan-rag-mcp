@@ -39,8 +39,13 @@ Use one of these whenever you are unsure of an exact action name or parameter �
 
 ## 2. The local `eplan` action server
 
-It exposes **234 tools** (full tool-by-tool reference: [the project wiki](https://github.com/covagashi/eplan-rag-mcp/wiki)):
+It exposes **254 tools** (full tool-by-tool reference: [the project wiki](https://github.com/covagashi/eplan-rag-mcp/wiki)):
 
+- **5 script-host tools** (`eplan_script_hello`, `eplan_script_run`,
+  `eplan_script_status`, `eplan_script_cancel`, `eplan_script_list`): typed C#
+  run inside EPLAN with no rebuild and no restart. See "Escape hatches" below;
+  prefer them to `eplan_execute_custom_script` for anything that reads or writes
+  the data model.
 - **8 connection/utility tools**: `eplan_versions`, `eplan_servers`,
   `eplan_connect`, `eplan_status`, `eplan_ping`, `eplan_test`,
   `eplan_disconnect`, `eplan_list_extensions`.
@@ -279,6 +284,30 @@ All of these exist as `eplan_*` tools:
 
 ### Escape hatches
 
+- **`eplan_script_run(code=... | script=..., args=..., project=...)` — the
+  preferred way to do anything the tools above do not cover.** Write ordinary,
+  typed C# against the EPLAN API: `using Eplan.EplApi.DataModel;` works here
+  (the host compiles with the full reference set; CS0234 is a limit of EPLAN's
+  own script engine only). A bare statement body is enough:
+  `var p = ctx.RequireProject(); return new DMObjectsFinder(p).GetPages(null).Length;`.
+  - `ctx` gives `Project`, `Args` (`String`/`Int`/`Bool`/`List`),
+    `Budget.Check()` (call it in every long loop: it is the only way a run can
+    stop), `Progress()`, `Log()`, `Lock(obj)`, `DryRun`, `WriteAllowed`.
+    Return plain data. The run already holds a `LockingStep`.
+  - Call `eplan_script_hello` once first: it reports the host version, which
+    runtime answers (`addin`, else `bootstrap`), the EPLAN version and the
+    license. Both runtimes need the EPLAN API developer license.
+  - **Writes:** declare `// @writes true`. Ad-hoc scripts may write only while
+    every open project is a scratch clone from `eplan_scratch_project_create`.
+    A real project needs a saved script, `allow_real_project=True` and the
+    `confirm_code` from a `compile_only=True` run of that script, approved by
+    the user. Read-only runs reject EPLAN writes at compile time.
+  - Compile errors come back with your own line numbers and "did you mean"
+    hints; fix and re-run (a warm compile takes milliseconds). Use
+    `compile_only=True` to check without running.
+  - Long runs return a `run_id`: follow with `eplan_script_status`, stop with
+    `eplan_script_cancel`. `eplan_script_list` shows the script library;
+    `dotnet/scripts/_template.cs` is the starting point for a new one.
 - `eplan_execute_raw_action("ActionName /PARAM:value ...")` — run any EPLAN
   action string directly (still wrapped in QuietMode). Use after confirming the
   syntax with the RAG.
