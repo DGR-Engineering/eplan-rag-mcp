@@ -53,7 +53,7 @@ def mgr(tmp_path, monkeypatch):
     monkeypatch.setattr(eplan_connection, "DIALOG_CHECK_S", 0.1)
     monkeypatch.setattr(eplan_connection, "_blocking_dialogs", lambda pids, windows=None: [])
     monkeypatch.setattr(eplan_connection, "eplan_pids", lambda: [99])
-    monkeypatch.setattr(eplan_connection, "pid_alive", lambda pid: pid == 99)
+    monkeypatch.setattr(eplan_connection, "pid_alive", lambda pid, *_: pid == 99)
     m = EPLANConnectionManager()
     m.connected = True
     m.pid = 99
@@ -138,7 +138,7 @@ def test_call_leaked_past_a_reconnect_keeps_the_new_marker(mgr):
 
 def test_exception_with_eplan_gone_is_not_running(mgr, monkeypatch):
     mgr.client.fail = RuntimeError("channel closed")
-    monkeypatch.setattr(eplan_connection, "pid_alive", lambda pid: False)
+    monkeypatch.setattr(eplan_connection, "pid_alive", lambda pid, *_: False)
     result = mgr.execute_action("someAction")
     assert result["errorType"] == "EplanNotRunning"
     assert result["next_step"] == "eplan_app_launch"
@@ -148,7 +148,7 @@ def test_exception_with_eplan_gone_is_not_running(mgr, monkeypatch):
 def test_clean_return_with_eplan_gone_is_not_running(mgr, monkeypatch):
     # Measured on EPLAN 2027: a killed EPLAN lets ExecuteAction return without raising.
     mgr.client.release.set()
-    monkeypatch.setattr(eplan_connection, "pid_alive", lambda pid: False)
+    monkeypatch.setattr(eplan_connection, "pid_alive", lambda pid, *_: False)
     result = mgr.execute_action("someAction")
     assert result["errorType"] == "EplanNotRunning" and "did not complete" in result["error"]
     assert mgr.connected is False
@@ -156,7 +156,7 @@ def test_clean_return_with_eplan_gone_is_not_running(mgr, monkeypatch):
 
 def test_ping_false_with_eplan_gone_says_not_running(mgr, monkeypatch):
     mgr.client.Ping = lambda: False
-    monkeypatch.setattr(eplan_connection, "pid_alive", lambda pid: False)
+    monkeypatch.setattr(eplan_connection, "pid_alive", lambda pid, *_: False)
     result = mgr.ping()
     assert result["alive"] is False and result["process_alive"] is False
     assert "eplan_app_launch" in result["next_step"] and mgr.connected is False
@@ -291,13 +291,13 @@ def test_busy_past_the_timeout_offers_a_way_out(mgr):
 def test_tasklist_failure_does_not_read_as_not_running(mgr, monkeypatch):
     mgr.client.fail = RuntimeError("boom")
     monkeypatch.setattr(eplan_connection, "eplan_pids", lambda: [])   # tasklist failed
-    monkeypatch.setattr(eplan_connection, "pid_alive", lambda pid: None)
+    monkeypatch.setattr(eplan_connection, "pid_alive", lambda pid, *_: None)
     result = mgr.execute_action("someAction")
     assert result.get("errorType") != "EplanNotRunning" and mgr.connected is True
 
 
 def test_stale_pid_is_not_scanned_for_dialogs(mgr, monkeypatch):
-    monkeypatch.setattr(eplan_connection, "pid_alive", lambda pid: False)
+    monkeypatch.setattr(eplan_connection, "pid_alive", lambda pid, *_: False)
     monkeypatch.setattr(eplan_connection, "eplan_pids", lambda: [7])
     assert mgr._watch_pids() == {7}
 
@@ -372,3 +372,55 @@ def test_next_step_picks_a_safe_button_in_any_language(tmp_path, monkeypatch):
 def test_a_window_hint_wins_over_the_button_advice(monkeypatch):
     monkeypatch.setitem(eplan_connection.WINDOW_HINTS, (5, "Data Portal"), "Ask the user.")
     assert EPLANConnectionManager._dialog_next_step({"hwnd": 5, "title": "Data Portal"}) == "Ask the user."
+
+
+def test_port_fallback_reads_the_version_from_eplan_exe(monkeypatch):
+    import process_control
+
+    class _Remote:
+        def Connect(self, host, port, timeout):
+            pass
+
+        def Ping(self):
+            return True
+
+    monkeypatch.setitem(sys.modules, "Eplan.EplApi.RemoteClient",
+                        types.SimpleNamespace(EplanRemoteClient=_Remote))
+    monkeypatch.setitem(sys.modules, "System", types.SimpleNamespace(
+        TimeSpan=types.SimpleNamespace(FromSeconds=lambda s: s)))
+    monkeypatch.setattr(process_control, "_listener_pid", lambda port: 4242)
+    monkeypatch.setattr(process_control, "eplan_version",
+                        lambda pid: "2027.0.3" if pid == 4242 else None)
+    m = EPLANConnectionManager()
+    m._clr_initialized = True
+    monkeypatch.setattr(m, "get_active_servers", lambda: [])
+    import connection.manager as manager_module
+    monkeypatch.setattr(manager_module, "eplan_listening_ports", lambda: ["49153"])
+    assert m.connect()["success"] is True
+    assert (m.port, m.pid, m.server_version) == ("49153", 4242, "2027.0.3")
+    assert m.eplan_major() == 2027
+
+
+def test_server_enumeration_reads_the_out_parameter_from_the_result(monkeypatch):
+    server = types.SimpleNamespace(EplanVersion="2027.0.3.27481", EplanVariant="Electric P8",
+                                   ServerPort=49153)
+
+    class _Remote:
+        def GetActiveEplanServersOnLocalMachine(self, passed):
+            return [server]          # pythonnet: the out value comes back; `passed` stays empty
+
+        def Dispose(self):
+            pass
+
+    class _List:
+        def __getitem__(self, _type):
+            return list
+
+    monkeypatch.setitem(sys.modules, "Eplan.EplApi.RemoteClient", types.SimpleNamespace(
+        EplanRemoteClient=_Remote, EplanServerData=object))
+    monkeypatch.setitem(sys.modules, "System.Collections.Generic",
+                        types.SimpleNamespace(List=_List()))
+    m = EPLANConnectionManager()
+    m._clr_initialized = True
+    assert m.get_active_servers() == [
+        {"version": "2027.0.3.27481", "variant": "Electric P8", "port": "49153"}]

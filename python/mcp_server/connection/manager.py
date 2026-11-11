@@ -14,6 +14,7 @@ from connection.processes import (
     _blocking_dialogs,
     eplan_listening_ports,
     eplan_state,
+    PID_SETTLE_S,
     pid_alive,
 )
 from connection.runner import RunnerMixin, call_with_timeout
@@ -43,8 +44,9 @@ class EPLANConnectionManager(ClrBootstrapMixin, RunnerMixin, DialogMixin,
         self.connected = False
         self.pid = None         # EPLAN.exe behind the connection, when local
         # The connected EPLAN's own version, as server enumeration reported it
-        # (e.g. "2027.0.3"). None when the port was given or enumeration was
-        # empty; target_version (the loaded DLLs) is the fallback then.
+        # (e.g. "2027.0.3"), else the local listener's EPLAN.exe file version.
+        # None when neither is known; target_version (the loaded DLLs) is the
+        # fallback then.
         self.server_version = None
         self._inflight = None   # action string of a call still stuck in EPLAN
         self._inflight_since = 0.0
@@ -73,17 +75,18 @@ class EPLANConnectionManager(ClrBootstrapMixin, RunnerMixin, DialogMixin,
             from System.Collections.Generic import List as NetList
 
             temp = EplanRemoteClient()
-            # out parameter in pythonnet
-            servers = NetList[EplanServerData]()
-            _, timed_out, err = call_with_timeout(
-                temp.GetActiveEplanServersOnLocalMachine, 10, servers)
+            # pythonnet returns an out parameter as the call's result and leaves
+            # the list passed in empty (measured on EPLAN 2027).
+            returned, timed_out, err = call_with_timeout(
+                temp.GetActiveEplanServersOnLocalMachine, 10, NetList[EplanServerData]())
             if err is not None:
                 raise err
             if timed_out:
                 raise TimeoutError("server enumeration did not answer within 10s")
 
+            servers = returned[-1] if isinstance(returned, tuple) else returned
             result = []
-            for s in servers:
+            for s in servers or []:
                 result.append({
                     "version": str(s.EplanVersion),
                     "variant": str(s.EplanVariant),
@@ -163,8 +166,12 @@ class EPLANConnectionManager(ClrBootstrapMixin, RunnerMixin, DialogMixin,
                         self.server_version = server_version
                         if host in self.LOCAL_HOSTS:
                             try:
-                                from process_control import _listener_pid
+                                from process_control import _listener_pid, eplan_version
                                 self.pid = _listener_pid(candidate)
+                                # Enumeration was empty or the port was given:
+                                # take the version from the listener's EPLAN.exe.
+                                if not self.server_version:
+                                    self.server_version = eplan_version(self.pid)
                             except Exception:
                                 pass
                         keep = True
@@ -253,7 +260,7 @@ class EPLANConnectionManager(ClrBootstrapMixin, RunnerMixin, DialogMixin,
             self.connected = False
             return {"alive": False, "message": f"Ping failed: {error}"}
         # A killed EPLAN answers Ping with a plain False, not an error.
-        if not alive and self.pid and self.host in self.LOCAL_HOSTS and pid_alive(self.pid) is False:
+        if not alive and self.pid and self.host in self.LOCAL_HOSTS and pid_alive(self.pid, PID_SETTLE_S) is False:
             self.connected = False
             return {"alive": False, "process_alive": False,
                     "message": f"EPLAN (pid {self.pid}) is no longer running",

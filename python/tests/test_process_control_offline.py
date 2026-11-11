@@ -142,3 +142,36 @@ def test_already_exited_process_is_rejected(api):
     with pytest.raises(RuntimeError, match="already exited"):
         control.WindowsProcess(123)
     api.CloseHandle.assert_called_once_with(98765)
+
+
+def test_file_version_reads_fixed_version_info():
+    import re
+    kernel32 = os.path.join(os.environ["SystemRoot"], "System32", "kernel32.dll")
+    assert re.fullmatch(r"\d+\.\d+\.\d+", control.file_version(kernel32) or "")
+
+
+def test_file_version_of_a_file_without_one_is_none(tmp_path):
+    path = tmp_path / "plain.txt"
+    path.write_text("x")
+    assert control.file_version(str(path)) is None
+
+
+@pytest.mark.parametrize("winerror", [5, 31])
+def test_killed_eplan_held_open_elsewhere_reads_as_exited(monkeypatch, winerror):
+    from connection import processes
+    monkeypatch.setattr(control, "WindowsProcess", Mock(side_effect=OSError(None, "x", None, winerror)))
+    monkeypatch.setattr(control, "process_ids", Mock(return_value=[456]))
+    assert processes.pid_alive(123) is False
+    assert processes.pid_alive(456) is None  # still listed: really unknown
+    control.process_ids.side_effect = OSError("snapshot failed")
+    assert processes.pid_alive(123) is None
+
+
+def test_pid_alive_waits_out_a_teardown(monkeypatch):
+    from connection import processes
+    answers = iter([None, None, False])
+    monkeypatch.setattr(processes, "_pid_alive_once", lambda pid: next(answers))
+    monkeypatch.setattr(processes.time, "sleep", lambda s: None)
+    assert processes.pid_alive(123, settle_s=5) is False
+    monkeypatch.setattr(processes, "_pid_alive_once", lambda pid: None)
+    assert processes.pid_alive(123) is None  # no settle: one look only
