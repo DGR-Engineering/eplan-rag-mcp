@@ -35,6 +35,12 @@ from `dotnet/artifacts/host`, then EPLAN was restarted. The target was a scratch
 schematic project (75 pages, 8,687 functions), carrying the scratch marker, opened alone. All three
 runtimes ran in the same session; the legacy probe add-in stayed registered for the parity check.
 
+Two builds were used. These checks ran on 26ecc2914: the add-in handshake, the public-script reads
+and `text_create`, the read-only refusal, the bootstrap checks, the write gate, and the first
+`identity.cs` run. These ran on e73e291a4, which carries the reference fix below: probe parity,
+the probe write, `lock_check.cs` on the add-in, the MasterData check on both runtimes, the offline
+host, and an `identity.cs` re-run on both runtimes with the same result.
+
 | Check | Result |
 |---|---|
 | Handshake, add-in | Pass. `script_hello(runtime="addin")` reports core 0.2.0, protocol 1, no version warning. `EplanMcp_RunScript` and `EplanMcp_Hello` resolve after the restart. |
@@ -48,7 +54,7 @@ runtimes ran in the same session; the legacy probe add-in stayed registered for 
 | `identity.cs` | Pass on both runtimes. One copy of `Eplan.EplApi.DataModelNetu` (Default context), and `ctx` comes from the runtime's own host copy. With both runtimes used in one session, the process holds two host copies, one per runtime: the add-in's in the Default context and the bootstrap's in `EplanMcp.Core/0.2.0/<hash>`. That is by design. |
 | Offline host | Pass. Started on the closed clone in 167 s (first start). `project_info` read 75 pages and 8,687 functions, about 16-20 s per run because each run opens and closes the project. Session-only scripts (`page_inspect`, `text_create`) were refused at the guard ("needs the interactive EPLAN"). `script_offline_stop` stopped it, and no host process remained after 1 s. |
 | Write gate | Pass. With the scratch marker removed from the same clone, ad-hoc writes were refused at the guard on both the add-in and the bootstrap: "the target project ... is not a scratch clone (no marker file)". `allow_real_project=True` without the server switch was refused before anything ran. The marker was restored afterwards. |
-| Unload | As in 0.1.0. Most runs report `unloaded: true`, but the first run on each new server connection often stays loaded (one small assembly). |
+| Unload | Not measured in steady state. About half the runs (13 of 25) reported `unloaded: false`. Every run here came from a fresh server connection, which is the case 0.1.0 already saw stay loaded. The warm-connection series that 0.1.0 measured was not repeated. |
 
 ### Fixed during this test
 
@@ -65,6 +71,8 @@ runtimes ran in the same session; the legacy probe add-in stayed registered for 
 - `write_allowed` is `true` in a result that failed the compile-time safety check of a read-only
   script, because it reports the gate and not the script. It is `false` in a result that reached
   the run phase.
-- During one batch, EPLAN briefly showed its interactive "Open symbol library" and "Symbol
-  selection" dialogs. Three add-in runs then reported `EplanBlockedByDialog` and "the host wrote no
-  result". The dialogs closed by themselves, and a retry passed. The cause is outside the host.
+- During one batch, EPLAN showed its "Open symbol library" and "Symbol selection" dialogs.
+  They were already open before the first refused call. Three add-in runs then reported
+  `EplanBlockedByDialog` and "the host wrote no result". The test closed no dialog. Shortly after,
+  the dialogs were gone, and a retry passed. The cause was not identified. EPLAN's system messages
+  show only read-only symbol-library opens, each closed again.
