@@ -69,11 +69,12 @@ def test_a_bad_script_is_skipped_not_fatal(tmp_path, monkeypatch, capsys):
     (lib / "dup.cs").write_text("// @tool dup\n// @arg a string\n// @arg a int\nreturn 1;",
                                 encoding="utf-8")
     (lib / "clash.cs").write_text("// @tool clash\n// @arg project string\nreturn 1;", encoding="utf-8")
+    (lib / "under.cs").write_text("// @tool under\n// @arg _x string\nreturn 1;", encoding="utf-8")
     monkeypatch.setenv("EPLAN_MCP_SCRIPT_TOOLS", "publish")
     app, reg = FastMCP("t"), ToolRegistry()
     names = script_tools.register(app, reg, "full", server.register_actions)
     assert "acme_count_pages" in names
-    for bad in ("acme_binary", "acme_badarg", "acme_dup", "acme_clash"):
+    for bad in ("acme_binary", "acme_badarg", "acme_dup", "acme_clash", "acme_under"):
         assert bad not in names
     err = capsys.readouterr()
     assert "binary.cs" in err.err and "clash.cs" in err.err and "reserved" in err.err

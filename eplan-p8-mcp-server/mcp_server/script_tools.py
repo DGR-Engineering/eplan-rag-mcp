@@ -54,6 +54,9 @@ def _parse_arg(spec: str) -> dict:
 def make_tool(path: str, header: dict):
     """A plain function whose signature mirrors the script's @arg lines."""
     args = [_parse_arg(a) for a in header.get("args", [])]
+    bad = [a["name"] for a in args if not a["name"].isidentifier() or a["name"].startswith("_")]
+    if bad:
+        raise ValueError("@arg name(s) %s must be identifiers not starting with '_'" % ", ".join(bad))
     reserved = [a["name"] for a in args if a["name"] in RESERVED]
     if reserved:
         raise ValueError("@arg %s is reserved for the run itself (%s)"

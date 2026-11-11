@@ -51,6 +51,7 @@ def host(tmp_path, monkeypatch):
     monkeypatch.setattr(scripthost, "HOST_DIR", str(host_dir))
     monkeypatch.setattr(scripthost, "RUNS_DIR", str(tmp_path / "runs"))
     monkeypatch.setattr(scripthost, "_addin_ok", None)
+    monkeypatch.setattr(scripthost, "_offline_last_pid", None)
     scripthost._jobs.clear()
     return host_dir
 
@@ -441,3 +442,18 @@ def test_a_stopping_host_that_is_still_alive_is_not_doubled(host, monkeypatch, t
 def test_pid_alive_knows_this_process_is_not_the_host():
     assert scripthost._pid_alive(os.getpid()) is False      # alive, but not EplanMcp.Host.Offline
     assert scripthost._pid_alive(999999) is False
+
+
+def test_a_host_that_deleted_its_status_but_still_runs_is_not_doubled(host, monkeypatch, tmp_path):
+    alive = {"pid": 555}
+    queue, started = _offline_env(monkeypatch, tmp_path, alive)
+    with open(queue / "status.json", "w") as f:
+        json.dump({"protocol": 1, "process_id": 555}, f)
+    assert scripthost._offline_ensure()["process_id"] == 555
+    os.remove(queue / "status.json")              # idle exit / stop: file gone, process not yet
+    with pytest.raises(TimeoutError):
+        scripthost._offline_ensure()
+    assert not started
+    alive["pid"] = None                            # now it has exited
+    assert scripthost._offline_ensure(start_timeout=2)["process_id"] == 777
+    assert len(started) == 1

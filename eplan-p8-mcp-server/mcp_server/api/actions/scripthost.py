@@ -267,6 +267,7 @@ _OFFLINE_STATUS_FRESH_S = 15
 _OFFLINE_EXE = "EplanMcp.Host.Offline.exe"
 _OFFLINE_STOP_WAIT_S = 60.0
 _offline_lock = threading.Lock()
+_offline_last_pid = None    # last host pid seen: it outlives its status.json while it shuts down
 
 
 def _pid_alive(pid: int) -> bool:
@@ -281,9 +282,14 @@ def _pid_alive(pid: int) -> bool:
     from ctypes import wintypes
     k32 = ctypes.WinDLL("kernel32", use_last_error=True)
     k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    k32.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                               ctypes.POINTER(wintypes.DWORD))
+    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
     handle = k32.OpenProcess(0x1000, False, int(pid))    # PROCESS_QUERY_LIMITED_INFORMATION
     if not handle:
-        return False
+        return ctypes.get_last_error() == 5     # access denied: it exists, so do not start another
     try:
         code = wintypes.DWORD()
         if not k32.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value != 259:  # STILL_ACTIVE
@@ -313,8 +319,10 @@ def _offline_host():
         time.sleep(0.1)
     if not isinstance(status, dict):
         return None, False
+    global _offline_last_pid
     pid = status.get("process_id")
     if pid:
+        _offline_last_pid = pid
         return (status, True) if _pid_alive(pid) else (None, False)
     try:
         fresh = time.time() - os.path.getmtime(path) < _OFFLINE_STATUS_FRESH_S
@@ -347,6 +355,14 @@ def _offline_ensure(start_timeout: float = 180.0) -> dict:
             if alive:
                 raise TimeoutError("The offline host is stopping (a stop was requested) and is still "
                                    "finishing a run; try again when it has exited.")
+        # A host that is shutting down (stop or idle exit) deletes status.json before its process
+        # ends: wait for the last pid seen too.
+        deadline = time.time() + _OFFLINE_STOP_WAIT_S
+        while _offline_last_pid and _pid_alive(_offline_last_pid) and time.time() < deadline:
+            time.sleep(1)
+        if _offline_last_pid and _pid_alive(_offline_last_pid):
+            raise TimeoutError("The previous offline host (pid %s) is still shutting down; try again "
+                               "when it has exited." % _offline_last_pid)
         exe = os.path.join(OFFLINE_DIR, _OFFLINE_EXE)
         if not os.path.isfile(exe):
             raise FileNotFoundError(f"Offline host not built: {exe}. Build dotnet/src/EplanMcp.Host.Offline (Release).")

@@ -92,6 +92,12 @@ def _args_path(payload: dict) -> str:
 
 def _run(op: str, payload: dict, timeout: float, driver: str = None) -> dict:
     driver = driver or DRIVER_PS1
+    if "watch_id" in payload and not (isinstance(payload["watch_id"], str)
+                                      and _WATCH_ID.fullmatch(payload["watch_id"])):
+        # It becomes part of file paths in UiDrive.ps1: every entry point is checked here.
+        return {"success": False, "op": op,
+                "error": "watch_id must be the 12 lowercase hex characters "
+                         "ui_dismiss_watch_start returned; got %r" % (payload["watch_id"],)}
     if not os.path.exists(driver):
         return {"success": False, "error": "Driver not found: %s" % driver}
     argf = _args_path(payload)
@@ -254,9 +260,5 @@ def ui_dismiss_watch_stop(watch_id: str, status_only: bool = False) -> dict:
         {"success": True, "count": N, "still_running": bool,
          "dismissed": [{at, hwnd, title, class, rule, button, result}]}
     """
-    if not isinstance(watch_id, str) or not _WATCH_ID.fullmatch(watch_id):
-        return {"success": False,
-                "error": "watch_id must be the 12 lowercase hex characters "
-                         "ui_dismiss_watch_start returned; got %r" % (watch_id,)}
     return _run("dismiss_watch", {"mode": "status" if status_only else "stop",
                                   "watch_id": watch_id}, timeout=180)
