@@ -41,7 +41,10 @@ def _advertised_count():
     return int(m.group(1).replace(",", ""))
 
 
-def test_llm_md_tool_count_matches_what_the_server_publishes():
+def test_llm_md_tool_count_matches_what_the_server_publishes(monkeypatch):
+    # The public count only: a private extension pack named in the developer's own
+    # environment must not leak into (or break) the number llm.md advertises.
+    monkeypatch.setenv("EPLAN_MCP_EXTENSIONS", "")
     app, registry, _ = server.build_app(mode="full")
     published = len(app._tool_manager._tools)
     advertised = _advertised_count()

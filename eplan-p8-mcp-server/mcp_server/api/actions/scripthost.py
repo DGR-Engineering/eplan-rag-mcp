@@ -50,8 +50,9 @@ HOST_DIR = os.environ.get("EPLAN_MCP_HOST_DIR") or os.path.join(DOTNET_DIR, "art
 # messages). The user profile itself, ProgramData and the 8.3-form TEMP all work.
 RUNS_DIR = os.environ.get("EPLAN_MCP_RUNS_DIR") or os.path.join(os.path.expanduser("~"), ".eplan-mcp", "runs")
 
-# Script libraries: the public one here, plus any folders an extension adds.
-_extra_script_dirs = []
+# Script libraries: the public one here, plus any folders an extension adds (folder -> helper
+# .cs files compiled into every script from that folder).
+_extra_script_dirs = {}
 
 _jobs = {}
 _jobs_lock = threading.Lock()
@@ -60,15 +61,21 @@ _addin_checked = 0.0
 _ADDIN_RECHECK_S = 600   # a "no add-in" answer is re-checked after this long
 
 
-def register_script_dir(path: str) -> None:
-    """Add a folder of .cs scripts to the library (used by extensions)."""
-    path = os.path.abspath(path)
-    if path not in _extra_script_dirs:
-        _extra_script_dirs.append(path)
+def register_script_dir(path: str, helpers: list = None) -> None:
+    """Add a folder of .cs scripts to the library (used by extensions through eplan_mcp.ext)."""
+    _extra_script_dirs[os.path.abspath(path)] = [os.path.abspath(h) for h in (helpers or [])]
+
+
+def _helpers_for(script_path: str) -> list:
+    """Helper sources registered for the library folder a script lives in."""
+    if not script_path:
+        return []
+    folder = os.path.dirname(os.path.abspath(script_path))
+    return list(_extra_script_dirs.get(folder, []))
 
 
 def _script_dirs():
-    dirs = [os.path.join(DOTNET_DIR, "scripts")] + list(_extra_script_dirs)
+    dirs = [os.path.join(DOTNET_DIR, "scripts")] + list(_extra_script_dirs.keys())
     for d in (os.environ.get("EPLAN_MCP_SCRIPT_DIRS") or "").split(os.pathsep):
         if d.strip():
             dirs.append(os.path.abspath(d.strip()))
@@ -336,7 +343,7 @@ def script_run(code: str = None, script: str = None, args: dict = None, project:
         "allow_real_project": allow_real_project,
         "confirm": confirm,
         "budget_seconds": budget_seconds,
-        "helper_sources": [os.path.abspath(h) for h in (helpers or [])],
+        "helper_sources": _helpers_for(script_path) + [os.path.abspath(h) for h in (helpers or [])],
         "references": [],
         "run_folder": folder,
     })

@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.join(SCRIPT_DIR, "api"))
 import api.actions as eplan_actions
 from api.actions import _project_cache
 from tool_registry import ToolRegistry, make_meta_tools, META_TOOL_NAMES
+import tool_hints
 
 
 # ============================================================================
@@ -352,7 +353,8 @@ def _register_core(app, registry, mode):
         if published:
             # Registered raw (not through _json_wrapper): these already return
             # a JSON string, exactly as they did when they were decorated.
-            app.tool(name=tool_name)(func)
+            hints = tool_hints.annotations_for(tool_name, func, "eplan_")
+            app.tool(name=tool_name, annotations=tool_hints.to_mcp(hints))(func)
 
 
 # ============================================================================
@@ -390,7 +392,8 @@ def register_actions(actions_module, prefix="eplan_", app=None, registry=None, m
                          published=published)
 
         if published and app is not None:
-            app.tool(name=tool_name)(_json_wrapper(func))
+            hints = tool_hints.annotations_for(tool_name, func, prefix)
+            app.tool(name=tool_name, annotations=tool_hints.to_mcp(hints))(_json_wrapper(func))
 
 
 # ============================================================================
@@ -405,8 +408,11 @@ def register_actions(actions_module, prefix="eplan_", app=None, registry=None, m
 #
 # An extension module can:
 #   - set TOOL_PREFIX = "myprefix_" (default "eplan_") to namespace its tools
-#   - import shared plumbing: `from actions._base import ...`,
-#     `import actions` (the api folder is already on sys.path)
+#   - set EXT_API = (min, max): the eplan_mcp.ext versions it supports; a module
+#     whose range excludes the running version is refused with a plain message
+#   - use `from eplan_mcp import ext` - the ONLY supported plumbing. Importing
+#     `actions` / `actions._base` still works for old extensions, but those are
+#     internal and may change without notice.
 # A broken extension is reported on stderr and skipped - it never prevents
 # the server from starting.
 #
@@ -440,6 +446,13 @@ def load_extensions(env_value: str = None, app=None, registry=None, mode=None):
                 spec.loader.exec_module(module)
                 if not getattr(module, "__all__", None):
                     print(f"Extension {fname} has no __all__, skipping.", file=sys.stderr)
+                    continue
+                from eplan_mcp import ext as _ext
+                declared = getattr(module, "EXT_API", None)
+                if not _ext.compatible(declared):
+                    print(f"Extension {fname} needs extension API {declared}, this server has "
+                          f"{_ext.EXT_API_VERSION}; skipping. Update the extension or the server.",
+                          file=sys.stderr)
                     continue
                 prefix = getattr(module, "TOOL_PREFIX", "eplan_")
                 register_actions(module, prefix=prefix, app=app, registry=registry,
