@@ -429,6 +429,30 @@ from .catalog import (
     ribbon_catalog,
 )
 
+# Add-in development loop (build / deploy / restart / verify, driven by a manifest)
+from .addin_dev import (
+    addin_build,
+    addin_deploy,
+    addin_update,
+    list_addin_actions,
+)
+
+# Scratch symbol-library isolation (redirect $(MD_SYMBOLS) for symbol-writing tests)
+from .symbol_isolation import (
+    scratch_symbols_create,
+    scratch_symbols_restore,
+    scratch_symbols_purge,
+    scratch_symbols_status,
+    assert_isolation,
+)
+
+# UI Automation driver (out-of-process dialog driving and modal dismissing)
+from .ui_automation import (
+    ui_drive,
+    ui_dismiss_watch_start,
+    ui_dismiss_watch_stop,
+)
+
 # Re-export base utilities for advanced usage
 from ._base import (
     _get_connected_manager,
@@ -563,6 +587,13 @@ __all__ = [
     'update_detail_engineering',
     # Action catalog
     'action_catalog', 'action_describe', 'action_run', 'ribbon_catalog',
+    # Add-in development loop
+    'addin_build', 'addin_deploy', 'addin_update', 'list_addin_actions',
+    # Scratch symbol isolation
+    'scratch_symbols_create', 'scratch_symbols_restore', 'scratch_symbols_purge',
+    'scratch_symbols_status', 'assert_isolation',
+    # UI Automation
+    'ui_drive', 'ui_dismiss_watch_start', 'ui_dismiss_watch_stop',
     # Base
     '_get_connected_manager', '_build_action',
 ]

@@ -39,7 +39,7 @@ Use one of these whenever you are unsure of an exact action name or parameter �
 
 ## 2. The local `eplan` action server
 
-It exposes **239 tools** (full tool-by-tool reference: [the project wiki](https://github.com/covagashi/eplan-rag-mcp/wiki)):
+It exposes **251 tools** (full tool-by-tool reference: [the project wiki](https://github.com/covagashi/eplan-rag-mcp/wiki)):
 
 - **5 script-host tools** (`eplan_script_hello`, `eplan_script_run`,
   `eplan_script_status`, `eplan_script_cancel`, `eplan_script_list`): typed C#
@@ -49,7 +49,7 @@ It exposes **239 tools** (full tool-by-tool reference: [the project wiki](https:
 - **8 connection/utility tools**: `eplan_versions`, `eplan_servers`,
   `eplan_connect`, `eplan_status`, `eplan_ping`, `eplan_test`,
   `eplan_disconnect`, `eplan_list_extensions`.
-- **211 EPLAN action tools** → `eplan_<action>` (e.g. `eplan_open_project`).
+- **223 EPLAN action tools** → `eplan_<action>` (e.g. `eplan_open_project`).
   Includes 5 discovery tools (`eplan_settings_list_children`,
   `eplan_list_schemes`, `eplan_list_report_templates`, `eplan_list_layers`,
   `eplan_list_enums`) that enumerate real EPLAN catalogs instead of guessing,
@@ -123,7 +123,18 @@ It exposes **239 tools** (full tool-by-tool reference: [the project wiki](https:
   full exit/relaunch/reconnect/reopen cycles for unattended add-in
   deploy-test loops), scratch project fixtures
   (`eplan_scratch_project_create` / `_discard` / `_list` — disposable clones
-  of a template project; deletion is confined to the scratch root), and
+  of a template project; deletion is confined to the scratch root), an
+  add-in development loop driven by a manifest JSON (`eplan_addin_build`,
+  `eplan_addin_deploy`, `eplan_addin_update` - build, shut EPLAN down, deploy,
+  relaunch, verify the actions registered - and `eplan_list_addin_actions`, a
+  static scan of the add-in's C# for its action names), scratch symbol-library
+  isolation (`eplan_scratch_symbols_create` / `_restore` / `_purge` /
+  `_status` and `eplan_assert_isolation` - redirect $(MD_SYMBOLS) at copies so
+  a symbol-writing test cannot reach the real libraries; the gate needs a
+  library reader an extension registers), out-of-process UI Automation
+  (`eplan_ui_drive`, `eplan_ui_dismiss_watch_start`,
+  `eplan_ui_dismiss_watch_stop`: drive WinForms dialogs and arm a modal dismisser BEFORE a blocking action;
+  dialog presets come from extensions), and
   `eplan_get_system_messages` (read EPLAN's system message tree — the same
   errors/warnings the user sees in the GUI's system messages dialog).
 - **4 action-catalog tools** reaching the ~1,050 further EPLAN actions that

@@ -72,3 +72,37 @@ def scratch_root() -> str:
 def config_dir(extension_file: str) -> str:
     """The folder of an extension module, for its own presets and manifests."""
     return os.path.dirname(os.path.abspath(extension_file))
+
+
+def register_addin_manifest(name: str, manifest) -> None:
+    """Make an add-in manifest callable by name in eplan_addin_build / _deploy / _update /
+    eplan_list_addin_actions. `manifest` is a dict or a path to a JSON file; relative paths in it
+    resolve against its "root" (a dict's root defaults to the current directory, a file's to the
+    file's folder). Format: api/actions/addin_dev.py. Re-registering a name replaces it."""
+    from api.actions import addin_dev
+    addin_dev.register_manifest(name, manifest)
+
+
+def register_dialog_preset(name: str, rules: list) -> None:
+    """Register a named rule set for eplan_ui_dismiss_watch_start(preset=name): a list of
+    {"title_regex", "button_name"} dicts (both regexes), each pairing a dialog caption with its
+    safest button. Raises ValueError on a malformed rule. Re-registering a name replaces it."""
+    from api.actions import ui_automation
+    ui_automation.register_preset(name, rules)
+
+
+def register_isolation_preset(name: str, settings: dict) -> None:
+    """Register settings for the eplan_scratch_symbols_* / eplan_assert_isolation tools, picked
+    with preset=name (or used by default when it is the only one). Keys, all optional:
+    "project_libraries" - callable returning (libraries, error, project), libraries being
+        [{"name", "path", "exists"}] read live from the open project (required for
+        assert_isolation and for scratch_symbols_create without explicit libraries);
+    "current_project" - callable returning the focused project path (default:
+        eplan_get_current_project);
+    "protected_roots" - folders no library may resolve under while isolated;
+    "dir_prefix" - scratch directory name prefix (default "symbols_scratch");
+    "symbols_setting" - the user setting holding $(MD_SYMBOLS) (default
+        USER.TrDMProject.Masterdata.Pathnames.Symbols).
+    Re-registering a name replaces it."""
+    from api.actions import symbol_isolation
+    symbol_isolation.register_preset(name, settings)

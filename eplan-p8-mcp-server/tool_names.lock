@@ -6,11 +6,15 @@ aas_inspect_package	read
 eplan_action_catalog	read
 eplan_action_describe	read
 eplan_action_run	-
+eplan_addin_build	-
+eplan_addin_deploy	destructive
+eplan_addin_update	destructive
 eplan_api_describe	read
 eplan_api_types	read
 eplan_app_launch	-
 eplan_app_restart	destructive
 eplan_app_shutdown	destructive
+eplan_assert_isolation	read
 eplan_backup_masterdata	-
 eplan_backup_project	-
 eplan_calculate_cabinet_weight	-
@@ -107,6 +111,7 @@ eplan_insert_3d_macro	-
 eplan_insert_device	-
 eplan_insert_model_view	-
 eplan_insert_symbol_reference	-
+eplan_list_addin_actions	read
 eplan_list_dialogs	read
 eplan_list_enums	read
 eplan_list_extensions	read
@@ -191,6 +196,10 @@ eplan_save_workspace	-
 eplan_scratch_project_create	-
 eplan_scratch_project_discard	destructive
 eplan_scratch_project_list	read
+eplan_scratch_symbols_create	-
+eplan_scratch_symbols_purge	destructive
+eplan_scratch_symbols_restore	destructive
+eplan_scratch_symbols_status	read
 eplan_script_cancel	-
 eplan_script_hello	read
 eplan_script_list	read
@@ -227,6 +236,9 @@ eplan_synchronize_project	-
 eplan_test	-
 eplan_topology_operation	-
 eplan_translate_project	-
+eplan_ui_dismiss_watch_start	-
+eplan_ui_dismiss_watch_stop	-
+eplan_ui_drive	-
 eplan_unite_net_definition_points	-
 eplan_unregister_addon	destructive
 eplan_unregister_script	destructive
