@@ -100,6 +100,17 @@ namespace EplanMcp.Scripting.Core
         }
     }
 
+    /// <summary>
+    /// What a user approves before a write to a real project: the script source, every helper
+    /// source and the exact argument text, joined with NUL. The server computes nothing itself; it
+    /// shows the first 16 hex digits a compile_only run returned and passes them back as confirm.
+    /// </summary>
+    public static class Approval
+    {
+        public static string Hash(string source, IEnumerable<string> helperTexts, string? argsCanonical) =>
+            Hashing.Sha256Hex(source + "\0" + string.Join("\0", helperTexts) + "\0" + (argsCanonical ?? "{}"));
+    }
+
     public static class Hashing
     {
         public static string Sha256Hex(string text) => Sha256Hex(Encoding.UTF8.GetBytes(text));

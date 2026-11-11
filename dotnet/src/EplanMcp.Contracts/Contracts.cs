@@ -36,6 +36,10 @@ namespace EplanMcp.Contracts
 
         public Dictionary<string, object?> Args { get; set; } = new Dictionary<string, object?>();
 
+        /// <summary>The arguments as canonical JSON text (sorted keys, no spaces). When set, the host
+        /// uses THIS for the script's arguments, and it is part of the approval hash.</summary>
+        public string? ArgsCanonical { get; set; }
+
         /// <summary>Project link file (.elk) or project name to act on. Null: the focused project,
         /// else the only open one.</summary>
         public string? Project { get; set; }
@@ -44,7 +48,8 @@ namespace EplanMcp.Contracts
         public bool DryRun { get; set; }
 
         /// <summary>Real-project writes need all three: this flag, a saved script, and
-        /// <see cref="Confirm"/> equal to the source hash prefix the server showed the user.</summary>
+        /// <see cref="Confirm"/> equal to the start of the approval hash (source + helpers + args)
+        /// a compile_only run returned and the user approved.</summary>
         public bool AllowRealProject { get; set; }
         public string? Confirm { get; set; }
 
@@ -97,6 +102,10 @@ namespace EplanMcp.Contracts
         public string? WriteGate { get; set; }
         public string? UndoDescription { get; set; }
         public string? SourceHash { get; set; }
+
+        /// <summary>Hash of source + helpers + canonical args; its first 16 hex digits are the
+        /// confirm code for a real-project write.</summary>
+        public string? ApprovalHash { get; set; }
         public bool? Unloaded { get; set; }
         public long DurationMs { get; set; }
         public ScriptManifest? Manifest { get; set; }

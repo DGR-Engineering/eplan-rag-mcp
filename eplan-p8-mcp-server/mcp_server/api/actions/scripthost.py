@@ -18,15 +18,14 @@ add-in when it answers EplanMcp_Hello, else the bootstrap.
 
 Writes (D7): ad-hoc scripts may write only when every open project is a scratch clone made by
 scratch_project_create (it leaves a marker file). A real project needs a SAVED script,
-allow_real_project=True, and confirm=<the confirm_code a compile_only run returned>; a backup is
-taken first. This is a guard against mistakes, not a sandbox: a script is C# running in EPLAN.
+allow_real_project=True, and confirm=<the confirm_code a compile_only run of the same script, args
+and helpers returned>; take a backup first (eplan_backup_project). This is a guard against mistakes, not a sandbox: a script is C# running in EPLAN.
 
 Runs are jobs. script_run waits up to wait_seconds and returns the result, or a run_id to follow
 with script_status (progress, heartbeat) and stop with script_cancel. A script stops only where it
 calls ctx.Budget.Check(): EPLAN cannot abort a running script.
 """
 
-import hashlib
 import json
 import os
 import threading
@@ -54,6 +53,8 @@ _extra_script_dirs = []
 _jobs = {}
 _jobs_lock = threading.Lock()
 _addin_ok = None   # None = unknown, True/False after the first hello
+_addin_checked = 0.0
+_ADDIN_RECHECK_S = 600   # a "no add-in" answer is re-checked after this long
 
 
 def register_script_dir(path: str) -> None:
@@ -69,10 +70,6 @@ def _script_dirs():
         if d.strip():
             dirs.append(os.path.abspath(d.strip()))
     return [d for d in dirs if os.path.isdir(d)]
-
-
-def _source_hash(source: str) -> str:
-    return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
 def _parse_header(source: str) -> dict:
@@ -165,7 +162,8 @@ def _bootstrap_script(run_folder: str, mode: str, request_path: str, result_path
                        ("CORE_VERSION", _host_version() or "0.0.0")):
         text = text.replace("{{" + key + "}}", value.replace('"', '""'))
     path = os.path.join(run_folder, "bootstrap.cs")
-    with open(path, "w", encoding="utf-8") as f:
+    # With a BOM, so EPLAN's script engine reads non-ASCII paths (a user name, say) as UTF-8.
+    with open(path, "w", encoding="utf-8-sig") as f:
         f.write(text)
     return path
 
@@ -213,12 +211,13 @@ def _hello(runtime: str, timeout: float = 30.0) -> dict:
 
 
 def _pick_runtime(runtime: str) -> str:
-    global _addin_ok
+    global _addin_ok, _addin_checked
     if runtime in ("addin", "bootstrap"):
         return runtime
-    if _addin_ok is None:
+    if _addin_ok is None or (not _addin_ok and time.time() - _addin_checked > _ADDIN_RECHECK_S):
         hello = _hello("addin", timeout=20.0)
         _addin_ok = bool(hello.get("success")) and hello.get("protocol") == PROTOCOL
+        _addin_checked = time.time()
     return "addin" if _addin_ok else "bootstrap"
 
 
@@ -287,27 +286,34 @@ def script_run(code: str = None, script: str = None, args: dict = None, project:
     except FileNotFoundError as e:
         return {"success": False, "error": str(e)}
 
-    source_hash = _source_hash(source)
     if allow_real_project and not compile_only:
         if not script_path:
             return {"success": False, "error": "Real-project writes need a saved script, not ad-hoc code."}
-        if not confirm or not source_hash.startswith(confirm.lower()) or len(confirm) < 12:
+        # The host checks confirm against its own hash of source + helpers + these exact args.
+        if not confirm or len(confirm) < 12:
             return {"success": False,
                     "error": "Real-project writes need confirm=<confirm_code> from a compile_only "
-                             "run of this exact script, shown to and approved by the user."}
+                             "run of this exact script with these exact args and helpers, shown to "
+                             "and approved by the user. Take a backup first (eplan_backup_project)."}
 
+    run_id = uuid.uuid4().hex[:12]
     with _jobs_lock:
-        busy = [j for j in _jobs.values() if j["thread"].is_alive()]
-    if busy:
-        return {"success": False, "error": f"Run {busy[0]['run_id']} is still running; EPLAN runs one "
-                                           "script at a time. Use script_status or script_cancel."}
+        # Check and claim in one step, so two calls can never start two scripts at once.
+        busy = [j for j in _jobs.values() if _is_busy(j)]
+        if busy:
+            return {"success": False, "error": f"Run {busy[0]['run_id']} is still running; EPLAN runs one "
+                                               "script at a time. Use script_status or script_cancel."}
+        claim = {"run_id": run_id, "claimed": True, "thread": None, "started": time.time(),
+                 "deadline": time.time() + budget_seconds + 180}
+        _jobs[run_id] = claim
 
     try:
         chosen = _pick_runtime(runtime)
     except Exception as e:  # noqa: BLE001 - surface any connection failure plainly
+        with _jobs_lock:
+            _jobs.pop(run_id, None)
         return {"success": False, "error": f"Could not reach EPLAN: {e}"}
 
-    run_id = uuid.uuid4().hex[:12]
     folder = _new_run_folder(run_id)
     request_path = os.path.join(folder, "request.json")
     result_path = os.path.join(folder, "result.json")
@@ -318,6 +324,9 @@ def script_run(code: str = None, script: str = None, args: dict = None, project:
         "script_path": script_path,
         "source_name": os.path.basename(script_path) if script_path else "snippet.cs",
         "args": args or {},
+        # The host runs with exactly this text and hashes it into the confirm code.
+        "args_canonical": json.dumps(args or {}, sort_keys=True, separators=(",", ":"),
+                                     ensure_ascii=False),
         "project": project,
         "compile_only": compile_only,
         "dry_run": dry_run,
@@ -330,7 +339,7 @@ def script_run(code: str = None, script: str = None, args: dict = None, project:
     })
 
     job = {"run_id": run_id, "runtime": chosen, "folder": folder, "result_path": result_path,
-           "started": time.time(), "call": None}
+           "started": time.time(), "call": None, "deadline": claim["deadline"]}
 
     def work():
         try:
@@ -345,9 +354,18 @@ def script_run(code: str = None, script: str = None, args: dict = None, project:
     job["thread"].start()
     job["thread"].join(timeout=max(0.0, wait_seconds))
     out = script_status(run_id)
-    if compile_only and out.get("ok"):
-        out["confirm_code"] = source_hash[:16]
+    if compile_only and out.get("ok") and out.get("approval_hash"):
+        out["confirm_code"] = out["approval_hash"][:16]
     return out
+
+
+def _is_busy(job: dict) -> bool:
+    """A job blocks new runs while its call is in flight, up to its deadline. Past the deadline
+    the call is treated as lost (EPLAN hung or crashed) so the server is not stuck forever."""
+    if time.time() > job.get("deadline", 0):
+        return False
+    thread = job.get("thread")
+    return job.get("claimed") and thread is None or (thread is not None and thread.is_alive())
 
 
 def script_status(run_id: str) -> dict:
@@ -361,7 +379,12 @@ def script_status(run_id: str) -> dict:
         job = _jobs.get(run_id)
     if not job:
         return {"success": False, "error": f"Unknown run_id {run_id} (runs are kept per server process)."}
-    if job["thread"].is_alive():
+    if job["thread"] is not None and job["thread"].is_alive() and time.time() > job["deadline"]:
+        return {"success": False, "state": "lost", "run_id": run_id,
+                "error": ("The run passed its deadline and EPLAN has not returned. EPLAN may be hung "
+                          "on this script or a dialog; check eplan_list_dialogs. New runs are allowed "
+                          "again, but EPLAN executes one call at a time.")}
+    if job["thread"] is not None and job["thread"].is_alive():
         heartbeat = os.path.join(job["folder"], "heartbeat")
         age = time.time() - os.path.getmtime(heartbeat) if os.path.exists(heartbeat) else None
         return {"success": True, "state": "running", "run_id": run_id, "runtime": job["runtime"],

@@ -120,7 +120,7 @@ namespace EplanMcp.Scripting.Core
             var text = plain.ToJsonString(Options);
             if (text.Length <= InlineLimitBytes || string.IsNullOrEmpty(runFolder)) return (plain, null, false);
             Directory.CreateDirectory(runFolder);
-            var file = Path.Combine(runFolder, "result.json");
+            var file = Path.Combine(runFolder, "result_data.json");   // result.json is the envelope
             File.WriteAllText(file, text);
             return (new JsonObject { ["preview"] = text.Substring(0, 2000) + "...", ["bytes"] = text.Length }, file, true);
         }

@@ -44,10 +44,13 @@ namespace EplanMcp.Scripting
             }
         }
 
+        /// <summary>The marker already sits beside the link file, so the folder is proven by where it
+        /// was found; comparing file names avoids false refusals from mapped-drive vs UNC, 8.3 or
+        /// junction spellings of the same folder.</summary>
         private static bool SamePath(string? a, string b)
         {
             if (string.IsNullOrEmpty(a)) return false;
-            try { return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase); }
+            try { return string.Equals(Path.GetFileName(a), Path.GetFileName(b), StringComparison.OrdinalIgnoreCase); }
             catch { return false; }
         }
     }

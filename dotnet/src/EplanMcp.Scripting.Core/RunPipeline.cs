@@ -79,30 +79,38 @@ namespace EplanMcp.Scripting.Core
                 var manifest = HeaderParser.Parse(req.Source, headerErrors);
                 res.Manifest = manifest;
                 res.Warnings.AddRange(headerErrors);
-                var sourceHash = Hashing.Sha256Hex(req.Source);
-                res.SourceHash = sourceHash;
+                res.SourceHash = Hashing.Sha256Hex(req.Source);
 
                 if (!RequirementMet(manifest.Requires, out var why))
                     return Fail(res, "request", why);
 
+                // The arguments the script sees are exactly the canonical text that was approved.
+                if (req.ArgsCanonical != null)
+                    req.Args = Json.Deserialize<Dictionary<string, object?>>(req.ArgsCanonical) ?? new Dictionary<string, object?>();
+                var helpers = req.HelperSources.Select(p => (path: p, text: File.ReadAllText(p))).ToList();
+                res.ApprovalHash = Approval.Hash(req.Source, helpers.Select(h => h.text), req.ArgsCanonical);
+
                 using var session = env.Open(req);
-                var pre = session.Prepare(manifest, sourceHash);
+                var pre = session.Prepare(manifest, res.ApprovalHash);
                 res.Project = pre.Project;
                 res.WriteAllowed = pre.WriteAllowed;
                 res.WriteGate = pre.Gate;
                 res.Warnings.AddRange(pre.Warnings);
                 if (!pre.Ok) return Fail(res, "guard", pre.Error ?? "Refused.");
-                if (manifest.Writes && !pre.WriteAllowed)
+                // A compile_only run goes on, so the caller gets the approval hash it needs to ask for
+                // a real-project write; the gate is still reported in write_gate.
+                if (manifest.Writes && !pre.WriteAllowed && !req.CompileOnly)
                     return Fail(res, "guard", "This script declares '// @writes true' but this run may not write: " + pre.Gate);
 
-                bool readOnly = !(manifest.Writes && pre.WriteAllowed);
+                // A compile_only check of a writing script uses the write rules it would run under.
+                bool readOnly = !(manifest.Writes && (pre.WriteAllowed || req.CompileOnly));
 
                 // ---- compile (cached) + safety check
                 var composed = SourceComposer.Compose(req.Source, SafeName(req.SourceName), env.Snippets);
-                var helpers = req.HelperSources.Select(p => (path: p, text: File.ReadAllText(p))).ToList();
                 var refs = ReferenceSet.FromCurrentProcess(env.ReferenceSearchDirs, req.References);
                 var key = Hashing.Sha256Hex(string.Join("\n", new[] { CoreVersion, refs.Fingerprint, readOnly.ToString(), manifest.Unsafe.ToString(), composed }
-                    .Concat(helpers.Select(h => h.path + "\n" + h.text))));
+                    .Concat(helpers.Select(h => h.path + "\n" + h.text))
+                    .Concat(req.References.Select(FileStamp))));
 
                 if (!Cache.TryGetValue(key, out var image))
                 {
@@ -130,7 +138,7 @@ namespace EplanMcp.Scripting.Core
                 }
 
                 // ---- run
-                audit.Start(req.RunId, sourceHash, req.Source, new Dictionary<string, object?>
+                audit.Start(req.RunId, res.SourceHash!, req.Source, new Dictionary<string, object?>
                 {
                     ["runtime"] = env.RuntimeName, ["project"] = pre.Project, ["write_allowed"] = pre.WriteAllowed,
                     ["script_path"] = req.ScriptPath, ["source_name"] = req.SourceName, ["args"] = req.Args,
@@ -139,6 +147,8 @@ namespace EplanMcp.Scripting.Core
 
                 var budget = new Budget(req.BudgetSeconds, req.RunFolder);
                 var progress = new ProgressWriter(req.RunFolder, budget);
+                // The script may write only if the gate allows it AND it declared '// @writes true'.
+                pre.WriteAllowed = !readOnly;
                 var ctx = session.CreateContext(manifest, pre, budget, progress, res.Log);
                 if (!readOnly && !req.DryRun)
                     res.UndoDescription = session.BeginWrite($"EplanMcp {manifest.Tool ?? SafeName(req.SourceName)} {req.RunId}");
@@ -252,6 +262,12 @@ namespace EplanMcp.Scripting.Core
                 }
             }
             return true;
+        }
+
+        private static string FileStamp(string path)
+        {
+            try { var f = new FileInfo(path); return path + "|" + f.Length + "|" + f.LastWriteTimeUtc.Ticks; }
+            catch { return path; }
         }
 
         private static string SafeName(string name) =>

@@ -21,6 +21,8 @@ namespace EplanMcp.Scripting.Core.Tests
     internal sealed class TestEnvironment : IRunEnvironment
     {
         public bool WriteAllowed { get; set; }
+        public string? LastApprovalHash { get; private set; }
+        public bool? ContextWriteAllowed { get; private set; }
         public string? VerifyError { get; set; }
         public int WriteSteps { get; private set; }
         public string RuntimeName => "test";
@@ -36,10 +38,16 @@ namespace EplanMcp.Scripting.Core.Tests
         {
             private readonly TestEnvironment _env;
             public Session(TestEnvironment env) { _env = env; }
-            public Preflight Prepare(ScriptManifest manifest, string sourceHash) =>
-                new Preflight { Project = "test.elk", WriteAllowed = _env.WriteAllowed, Gate = _env.WriteAllowed ? "scratch" : "real project" };
-            public object CreateContext(ScriptManifest m, Preflight p, Budget b, ProgressWriter pr, List<string> log) =>
-                new TestContext { Log = log, Budget = b };
+            public Preflight Prepare(ScriptManifest manifest, string approvalHash)
+            {
+                _env.LastApprovalHash = approvalHash;
+                return new Preflight { Project = "test.elk", WriteAllowed = _env.WriteAllowed, Gate = _env.WriteAllowed ? "scratch" : "real project" };
+            }
+            public object CreateContext(ScriptManifest m, Preflight p, Budget b, ProgressWriter pr, List<string> log)
+            {
+                _env.ContextWriteAllowed = p.WriteAllowed;
+                return new TestContext { Log = log, Budget = b };
+            }
             public string? BeginWrite(string description) { _env.WriteSteps++; return description; }
             public string? Verify() => _env.VerifyError;
             public void Dispose() { }
@@ -161,6 +169,34 @@ namespace EplanMcp.Scripting.Core.Tests
             Assert.True(res.Ok, res.Error);
             Assert.Equal(1, env.WriteSteps);
             Assert.NotNull(res.UndoDescription);
+        }
+
+        [Fact]
+        public void Compile_only_of_a_writing_script_returns_the_approval_hash_even_when_the_gate_is_closed()
+        {
+            var res = RunPipeline.Execute(Req("// @writes true\nreturn 1;", r => r.CompileOnly = true), new TestEnvironment { WriteAllowed = false }, Audit);
+            Assert.True(res.Ok, res.Error);
+            Assert.Equal(64, res.ApprovalHash!.Length);
+        }
+
+        [Fact]
+        public void Approval_hash_covers_args_and_helpers()
+        {
+            var a = Approval.Hash("src", new string[0], "{\"x\":1}");
+            Assert.NotEqual(a, Approval.Hash("src", new string[0], "{\"x\":2}"));
+            Assert.NotEqual(a, Approval.Hash("src", new[] { "helper" }, "{\"x\":1}"));
+            var env = new TestEnvironment();
+            var res = RunPipeline.Execute(Req("return ctx.Args.Count;", r => { r.ArgsCanonical = "{\"x\":1}"; r.Args = new Dictionary<string, object?>(); }), env, Audit);
+            Assert.Equal(env.LastApprovalHash, res.ApprovalHash);
+        }
+
+        [Fact]
+        public void Script_without_writes_header_gets_a_read_only_context_on_a_scratch_clone()
+        {
+            var env = new TestEnvironment { WriteAllowed = true };
+            var res = RunPipeline.Execute(Req("return 1;"), env, Audit);
+            Assert.True(res.Ok, res.Error);
+            Assert.False(env.ContextWriteAllowed);
         }
 
         [Fact]

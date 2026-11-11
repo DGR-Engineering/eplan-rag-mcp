@@ -1,7 +1,8 @@
 // EplanMcp script bootstrap. The server fills in the placeholder values and runs this file with
-// EPLAN's ExecuteScript action. It loads the host assemblies listed in the manifest FROM BYTES
-// (so the files on disk are never locked), checks each one's SHA-256 against the manifest, keeps
-// them in one named load context per core version, and hands the request to HostEntry.
+// EPLAN's ExecuteScript action. It reads the host assemblies listed in the manifest, checks every
+// SHA-256 BEFORE loading anything, then loads them FROM BYTES (so the files on disk are never
+// locked) into one load context named after the manifest's own hash: a rebuilt host gets a new
+// context, an unchanged one is reused, and a failed check never leaves a half-filled context.
 //
 // Reflection only, on purpose: EPLAN's script engine compiles against a fixed reference list that
 // has neither the EPLAN data model nor System.Runtime.Loader.
@@ -10,6 +11,7 @@
 // license as the add-in. It exists to avoid registration and restarts, not to avoid signing.
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Security.Cryptography;
@@ -28,8 +30,10 @@ public class EplanMcpBootstrap
         string coreVersion = "{{CORE_VERSION}}";
         try
         {
+            string manifestText = File.ReadAllText(Path.Combine(hostDir, "eplanmcp-manifest.txt"));
+            string alcName = "EplanMcp.Core/" + coreVersion + "/" + Hex(Sha(Encoding.UTF8.GetBytes(manifestText))).Substring(0, 16);
+
             Type alcType = typeof(object).Assembly.GetType("System.Runtime.Loader.AssemblyLoadContext", true);
-            string alcName = "EplanMcp.Core/" + coreVersion;
             object alc = null;
             foreach (object c in (IEnumerable)alcType.GetProperty("All").GetValue(null, null))
             {
@@ -37,22 +41,25 @@ public class EplanMcpBootstrap
             }
             if (alc == null)
             {
-                alc = Activator.CreateInstance(alcType, new object[] { alcName, false });
-                MethodInfo loadFromStream = alcType.GetMethod("LoadFromStream", new Type[] { typeof(Stream) });
-                string[] lines = File.ReadAllLines(Path.Combine(hostDir, "eplanmcp-manifest.txt"));
-                foreach (string raw in lines)
+                // Read and verify everything first; only a complete, verified set is ever loaded.
+                List<byte[]> images = new List<byte[]>();
+                foreach (string raw in manifestText.Split('\n'))
                 {
                     string line = raw.Trim();
                     if (line.Length == 0 || line.StartsWith("#")) continue;
                     int space = line.IndexOf(' ');
+                    if (space < 0) throw new InvalidOperationException("Bad manifest line: " + line);
                     string expected = line.Substring(0, space).Trim().ToLowerInvariant();
                     string file = line.Substring(space + 1).Trim();
                     byte[] bytes = File.ReadAllBytes(Path.Combine(hostDir, file));
-                    string actual = Hex(SHA256.Create().ComputeHash(bytes));
-                    if (actual != expected)
-                        throw new InvalidOperationException("Host file " + file + " does not match its manifest hash. Reinstall the host.");
-                    loadFromStream.Invoke(alc, new object[] { new MemoryStream(bytes) });
+                    if (Hex(Sha(bytes)) != expected)
+                        throw new InvalidOperationException("Host file " + file + " does not match its manifest hash. Rebuild or reinstall the host.");
+                    images.Add(bytes);
                 }
+                alc = Activator.CreateInstance(alcType, new object[] { alcName, false });
+                MethodInfo loadFromStream = alcType.GetMethod("LoadFromStream", new Type[] { typeof(Stream) });
+                foreach (byte[] bytes in images)
+                    loadFromStream.Invoke(alc, new object[] { new MemoryStream(bytes) });
             }
 
             Assembly scripting = null;
@@ -71,9 +78,34 @@ public class EplanMcpBootstrap
         {
             Exception inner = e;
             while (inner is TargetInvocationException && inner.InnerException != null) inner = inner.InnerException;
-            string msg = (inner.GetType().Name + ": " + inner.Message).Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", " ").Replace("\n", " ");
-            File.WriteAllText(resultPath, "{\"protocol\":1,\"runtime\":\"bootstrap\",\"ok\":false,\"phase\":\"request\",\"error\":\"Bootstrap failed: " + msg + "\"}");
+            WriteError(resultPath, inner.GetType().Name + ": " + inner.Message);
         }
+    }
+
+    private static void WriteError(string resultPath, string message)
+    {
+        try
+        {
+            StringBuilder s = new StringBuilder();
+            foreach (char ch in message)
+            {
+                if (ch == '"' || ch == '\\') s.Append('\\').Append(ch);
+                else if (ch < ' ') s.Append("\\u").Append(((int)ch).ToString("x4"));
+                else s.Append(ch);
+            }
+            string dir = Path.GetDirectoryName(resultPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            string tmp = resultPath + ".tmp";
+            File.WriteAllText(tmp, "{\"protocol\":1,\"runtime\":\"bootstrap\",\"ok\":false,\"phase\":\"request\",\"error\":\"Bootstrap failed: " + s + "\"}");
+            if (File.Exists(resultPath)) File.Delete(resultPath);
+            File.Move(tmp, resultPath);
+        }
+        catch { }
+    }
+
+    private static byte[] Sha(byte[] bytes)
+    {
+        using (SHA256 sha = SHA256.Create()) return sha.ComputeHash(bytes);
     }
 
     private static string Hex(byte[] hash)

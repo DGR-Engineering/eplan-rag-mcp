@@ -27,7 +27,8 @@ class FakeManager:
                 payload = {"protocol": 1, "core_version": "0.1.0", "runtime": "addin"}
             else:
                 req = json.load(open(action.split('/request:"')[1].split('"')[0], encoding="utf-8"))
-                payload = dict(self.result, run_id=req["run_id"], runtime="addin")
+                payload = dict(self.result, run_id=req["run_id"], runtime="addin",
+                               approval_hash="ab" * 32, args_seen=req["args_canonical"])
             json.dump(payload, open(result_path, "w", encoding="utf-8"))
             return {"success": True}
         if action.startswith("ExecuteScript"):
@@ -109,8 +110,15 @@ def test_real_project_write_needs_saved_script_and_confirm(host, monkeypatch):
 
     ok = scripthost.script_run(script=str(script), compile_only=True)
     assert len(ok["confirm_code"]) == 16
+    assert ok["confirm_code"] == "ab" * 8
     out = scripthost.script_run(script=str(script), allow_real_project=True, confirm=ok["confirm_code"])
     assert out["success"] is True
+
+
+def test_args_are_sent_canonically(host, monkeypatch):
+    use(monkeypatch, FakeManager())
+    out = scripthost.script_run(code="return 1;", args={"b": 1, "a": "x"})
+    assert out["args_seen"] == '{"a":"x","b":1}'
 
 
 def test_exactly_one_of_code_or_script(host, monkeypatch):

@@ -31,7 +31,14 @@ namespace EplanMcp.Scripting
             {
                 result = new RunResult { CoreVersion = RunPipeline.CoreVersion, Runtime = runtime, Phase = "request", Error = "Could not read the request: " + e.Message };
             }
-            WriteAtomically(resultPath, Json.Serialize(result));
+            TryWrite(resultPath, Json.Serialize(result));
+        }
+
+        /// <summary>Never throws into EPLAN: a result that cannot be written is lost, and the
+        /// server reports "no result" (the audit log still has the run).</summary>
+        private static void TryWrite(string path, string text)
+        {
+            try { WriteAtomically(path, text); } catch { }
         }
 
         /// <summary>Handshake: versions, features, EPLAN version, license and open projects.</summary>
@@ -57,7 +64,7 @@ namespace EplanMcp.Scripting
                     hello.OpenProjects = new Eplan.EplApi.DataModel.ProjectManager().OpenProjects.Select(p => p.ProjectLinkFilePath).ToArray();
             }
             catch (Exception e) { hello.Error = (hello.Error == null ? "" : hello.Error + "; ") + "open projects unavailable: " + e.Message; }
-            WriteAtomically(resultPath, Json.Serialize(hello));
+            TryWrite(resultPath, Json.Serialize(hello));
         }
 
         // ------------------------------------------------------------------ bootstrap path

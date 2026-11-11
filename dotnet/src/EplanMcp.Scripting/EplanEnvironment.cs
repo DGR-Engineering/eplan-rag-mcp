@@ -136,7 +136,11 @@ namespace EplanMcp.Scripting
             {
                 try
                 {
-                    return new ProjectManager().OpenProjects.Select(p => p.ProjectLinkFilePath).Where(p => !string.IsNullOrEmpty(p)).ToArray();
+                    // A project without a link path still counts: as "<unnamed>" it is never a
+                    // scratch clone, so it closes the write gate instead of slipping past it.
+                    return new ProjectManager().OpenProjects
+                        .Select(p => string.IsNullOrEmpty(p.ProjectLinkFilePath) ? "<unnamed:" + p.ProjectName + ">" : p.ProjectLinkFilePath)
+                        .ToArray();
                 }
                 catch
                 {
