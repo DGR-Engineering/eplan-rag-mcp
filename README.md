@@ -19,12 +19,12 @@ The three remote documentation RAGs live in the separate
 
 ```
 .
-└── eplan-p8-mcp-server/          # LOCAL: MCP server that controls EPLAN P8
+└── python/                       # LOCAL: MCP server that controls EPLAN P8
 ```
 
 | Component | Type | Purpose | EPLAN product |
 |---|---|---|---|
-| `eplan-p8-mcp-server/` | Local Python MCP | Drive a running EPLAN instance from Claude: open/close projects, exports, reports, scripts | EPLAN Electric P8 |
+| `python/` | Local Python MCP | Drive a running EPLAN instance from Claude: open/close projects, exports, reports, scripts | EPLAN Electric P8 |
 | [**eplan-cloudflare-rags**](https://github.com/covagashi/eplan-cloudflare-rags) | Remote Cloudflare Workers, separate repository | Serve the P8 2026, P8 2027 and EEC Pro documentation over MCP and REST | EPLAN Electric P8 and EEC Pro |
 | [**eplan-development-skill**](https://github.com/covagashi/eplan-development-skill) | Claude Code skill, separate repository | Teach Claude to write correct EPLAN scripts, API code and Remote Client apps | EPLAN Electric P8 |
 
@@ -41,12 +41,15 @@ inside EPLAN in real time and consult the documentation through search.
 ### Local EPLAN automation (P8)
 
 ```bash
-python YOURPATH/eplan-p8-mcp-server/install.py   # own .venv + registers "eplan"
+python YOURPATH/python/install.py   # own .venv + registers "eplan"
 claude mcp list   # should list "eplan"
 ```
 
 Then start EPLAN, open Claude Code, and say `connect to eplan`. The full guide is in
-[`eplan-p8-mcp-server/mcp_server/README.md`](eplan-p8-mcp-server/mcp_server/README.md).
+[`python/mcp_server/README.md`](python/mcp_server/README.md).
+
+> **Moved:** the server folder was called `eplan-p8-mcp-server/` before version 0.2.0. An MCP
+> registration that points at the old path stops working: run `python/install.py` again.
 
 ![Claude CLI configured](image.png)
 
@@ -90,6 +93,39 @@ develop → deploy → test loop:
 
 A tool-by-tool reference lives in [the project wiki](https://github.com/covagashi/eplan-rag-mcp/wiki).
 
+#### Script host
+
+The script host runs ordinary, typed C# against the EPLAN API (`using Eplan.EplApi.DataModel;`
+works) inside EPLAN, with no build and no restart. It compiles with EPLAN's own Roslyn, checks
+the script for unsafe calls, runs it in a collectible context and tries to unload it. The same script runs
+in three runtimes: a registered add-in, a bootstrap through `ExecuteScript` (nothing to register),
+or an offline host that needs no EPLAN window and works on closed projects. Writes go only to
+scratch clones unless a person enables real-project writes and approves each saved script. The
+library in `dotnet/scripts/` ships ready-made tools for texts, line styles, functions, macro boxes
+and parts. All runtimes need the EPLAN API developer license.
+
+![Script host: MCP client, Python server, three runtimes, EPLAN API](docs/images/script-host-architecture.svg)
+
+Quick start (the server folder is now `python/`: see the "Moved" note in
+[Quick start](#local-eplan-automation-p8)):
+
+1. `eplan_script_host_install`: downloads the host release, checks its SHA-256 sums and installs
+   it under `~/.eplan-mcp/host/<version>`. The script tools also do this on first use.
+2. `eplan_script_hello`: reports the host version, the runtime that answers, EPLAN and the license.
+3. Run a library script on a scratch clone. Pass `dry_run=True` to see what a writing script would
+   change:
+
+   ```text
+   eplan_script_run(script="text_placements", project="<scratch>.elk", args={"page": "<page>"})
+   eplan_script_run(script="text_set_height", project="<scratch>.elk", dry_run=True,
+                    args={"page": "<page>", "handle": "<handle from text_placements>", "factor": 1.5})
+   ```
+
+`eplan_script_run` defaults to `dry_run=False`. Set `EPLAN_MCP_SCRIPT_TOOLS=publish` to get each
+library script as its own `eplan_<name>` tool; writers published that way default to
+`dry_run=True`. How to write scripts, the write gate and the full tool list:
+[`dotnet/SCRIPTING.md`](dotnet/SCRIPTING.md).
+
 #### Discovery mode
 
 `EPLAN_MCP_MODE=discovery` publishes 13 tools instead of 199, trading a token-heavy tool
@@ -100,7 +136,7 @@ every tool's full schema on every request.
 front, a schema fetched on demand — so the `full` 199-tool list already costs it about as
 little as `discovery`'s 13 would, and layering discovery's search → describe → call
 indirection on top only adds a round-trip. The tradeoff and the measurements are in
-[`eplan-p8-mcp-server/mcp_server/README.md`](eplan-p8-mcp-server/mcp_server/README.md#discovery-mode-eplan_mcp_mode).
+[`python/mcp_server/README.md`](python/mcp_server/README.md#discovery-mode-eplan_mcp_mode).
 
 ### Remote documentation RAGs (P8, EEC Pro, 2027)
 
@@ -164,12 +200,12 @@ API calls expect. Re-indexing and redeploy run through GitHub Actions in
 #### Using it from this MCP server
 
 A ready-made extension ships in
-[`eplan-p8-mcp-server/extensions/symbol_search.py`](./eplan-p8-mcp-server/extensions/symbol_search.py).
+[`python/extensions/symbol_search.py`](./python/extensions/symbol_search.py).
 Enable it and the agent gets an `eplan_symbol_search` tool:
 
 ```powershell
 pip install sentence-transformers pillow requests
-set EPLAN_MCP_EXTENSIONS=<repo>\eplan-p8-mcp-server\extensions
+set EPLAN_MCP_EXTENSIONS=<repo>\python\extensions
 ```
 
 Then, pointed at a cropped symbol image, Claude calls
@@ -215,7 +251,7 @@ list, so adding an action takes two steps and no per-tool boilerplate.
 
 ### 1. Implement the action
 
-In `eplan-p8-mcp-server/mcp_server/api/actions/<your_module>.py`:
+In `python/mcp_server/api/actions/<your_module>.py`:
 
 ```python
 def open_project(project_path: str, open_mode: str = None) -> dict:
@@ -235,7 +271,7 @@ def open_project(project_path: str, open_mode: str = None) -> dict:
 ### 2. Export it
 
 Add the function to the imports **and** to `__all__` in
-`eplan-p8-mcp-server/mcp_server/api/actions/__init__.py`. It is then auto-registered as
+`python/mcp_server/api/actions/__init__.py`. It is then auto-registered as
 `eplan_open_project`.
 
 ### 3. Restart the MCP server
@@ -244,12 +280,12 @@ The new tool becomes available once Claude / the server restarts.
 
 ### 4. Validate against the official docs (optional)
 
-`eplan-p8-mcp-server/tools/validate_actions.py` cross-checks every action name and
+`python/tools/validate_actions.py` cross-checks every action name and
 parameter declared in the wrappers against the official EPLAN docs RAG and writes a
 markdown report:
 
 ```bash
-python eplan-p8-mcp-server/tools/validate_actions.py
+python python/tools/validate_actions.py
 ```
 
 ![EPLAN test](image-1.png)
@@ -291,6 +327,10 @@ def run_smoke_test(project_path: str) -> dict:
 Rules and behaviour:
 
 - `TOOL_PREFIX` namespaces the tools (`acme_run_smoke_test` above).
+- The stable contract is `eplan_mcp.ext` (`EXT_API_VERSION = 1`): `run_script`, `run_action`,
+  `register_script_dir` (adds a folder of `.cs` library scripts with their own helpers),
+  `scratch_root`. Declare `EXT_API = (1, 1)`; the server refuses an extension whose range does
+  not include its version. Anything outside `ext` may change in any release.
 - Extensions may import everything the built-in actions use: `actions`, `actions._base`,
   `actions.scripted._execute_script` (run C# inside EPLAN), `eplan_connection`.
 - A broken extension is reported on stderr and skipped; it never prevents the server from

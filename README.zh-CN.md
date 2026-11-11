@@ -15,12 +15,12 @@
 
 ```
 .
-└── eplan-p8-mcp-server/          # 本地：控制 EPLAN P8 的 MCP 服务器
+└── python/                       # 本地：控制 EPLAN P8 的 MCP 服务器
 ```
 
 | 组件 | 类型 | 用途 | 适用的 EPLAN 产品 |
 |---|---|---|---|
-| `eplan-p8-mcp-server/` | 本地 Python MCP | 从 Claude 驱动正在运行的 EPLAN 实例：打开/关闭项目、导出、报表、脚本 | EPLAN Electric P8 |
+| `python/` | 本地 Python MCP | 从 Claude 驱动正在运行的 EPLAN 实例：打开/关闭项目、导出、报表、脚本 | EPLAN Electric P8 |
 | [**eplan-cloudflare-rags**](https://github.com/covagashi/eplan-cloudflare-rags) | 独立仓库中的远程 Cloudflare Workers | 通过 MCP 和 REST 提供 P8 2026、P8 2027 与 EEC Pro 文档检索 | EPLAN Electric P8 与 EEC Pro |
 | [**eplan-development-skill**](https://github.com/covagashi/eplan-development-skill) | Claude Code Skill，独立仓库 | 教 Claude 写出正确的 EPLAN 脚本、API 代码和 Remote Client 应用 | EPLAN Electric P8 |
 
@@ -35,14 +35,18 @@
 ### 本地 EPLAN 自动化（P8）
 
 ```bash
-python YOURPATH/eplan-p8-mcp-server/install.py   # own .venv + registers "eplan"
+python YOURPATH/python/install.py   # own .venv + registers "eplan"
 claude mcp list   # 应当能列出 "eplan"
 ```
 
 随后启动 EPLAN，打开 Claude Code，并输入 `connect to eplan`。完整指南见
-[`eplan-p8-mcp-server/mcp_server/README.md`](eplan-p8-mcp-server/mcp_server/README.md)。
+[`python/mcp_server/README.md`](python/mcp_server/README.md)。
 
 ![Claude CLI configured](image.png)
+
+**Script host:** typed C# inside EPLAN, in three runtimes (add-in, bootstrap, offline). Guide in English: [`dotnet/SCRIPTING.md`](dotnet/SCRIPTING.md).
+
+![Script host architecture](docs/images/script-host-architecture.svg)
 
 #### 使用前提
 
@@ -81,7 +85,7 @@ claude mcp list   # 应当能列出 "eplan"
 `EPLAN_MCP_MODE=discovery` 只发布 13 个工具而非 199 个，代价是每个任务多一次检索往返，换来一份不那么消耗 token 的工具列表。对于每次请求都发送全部工具完整 schema 的 MCP 客户端来说，这很划算。
 
 **但在 Claude Code 中请不要启用它。** Claude Code 本身已经会延迟加载工具 schema —— 先给出名称列表，按需再取 schema —— 因此 `full` 模式下的 199 个工具，其成本已经和 discovery 的 13 个差不多；再叠加 discovery 的「搜索 → 描述 → 调用」这层间接，只是白白多一次往返。权衡与实测数据见
-[`eplan-p8-mcp-server/mcp_server/README.md`](eplan-p8-mcp-server/mcp_server/README.md#discovery-mode-eplan_mcp_mode)。
+[`python/mcp_server/README.md`](python/mcp_server/README.md#discovery-mode-eplan_mcp_mode)。
 
 ### 远程文档 RAG（P8、EEC Pro、2027）
 
@@ -138,7 +142,7 @@ MCP 服务器让 Claude 能够对 EPLAN *执行操作*；而 [**eplan-developmen
 
 ### 1. 实现该操作
 
-在 `eplan-p8-mcp-server/mcp_server/api/actions/<your_module>.py` 中：
+在 `python/mcp_server/api/actions/<your_module>.py` 中：
 
 ```python
 def open_project(project_path: str, open_mode: str = None) -> dict:
@@ -157,7 +161,7 @@ def open_project(project_path: str, open_mode: str = None) -> dict:
 
 ### 2. 导出该函数
 
-在 `eplan-p8-mcp-server/mcp_server/api/actions/__init__.py` 中，把该函数加入 imports **以及** `__all__`。它随后会被自动注册为 `eplan_open_project`。
+在 `python/mcp_server/api/actions/__init__.py` 中，把该函数加入 imports **以及** `__all__`。它随后会被自动注册为 `eplan_open_project`。
 
 ### 3. 重启 MCP 服务器
 
@@ -165,10 +169,10 @@ def open_project(project_path: str, open_mode: str = None) -> dict:
 
 ### 4. 对照官方文档进行校验（可选）
 
-`eplan-p8-mcp-server/tools/validate_actions.py` 会把封装函数中声明的每一个操作名称和参数，与官方 EPLAN 文档 RAG 进行交叉核对，并输出一份 markdown 报告：
+`python/tools/validate_actions.py` 会把封装函数中声明的每一个操作名称和参数，与官方 EPLAN 文档 RAG 进行交叉核对，并输出一份 markdown 报告：
 
 ```bash
-python eplan-p8-mcp-server/tools/validate_actions.py
+python python/tools/validate_actions.py
 ```
 
 ![EPLAN test](image-1.png)

@@ -15,12 +15,12 @@ Este repositorio contiene el servidor MCP local que controla una instancia de EP
 
 ```text
 .
-└── eplan-p8-mcp-server/          # LOCAL: servidor MCP que controla EPLAN P8
+└── python/                       # LOCAL: servidor MCP que controla EPLAN P8
 ```
 
 | Componente | Tipo | Función | Producto EPLAN |
 |---|---|---|---|
-| `eplan-p8-mcp-server/` | MCP local en Python | Controlar una instancia de EPLAN desde Claude: abrir/cerrar proyectos, exportaciones, informes y scripts | EPLAN Electric P8 |
+| `python/` | MCP local en Python | Controlar una instancia de EPLAN desde Claude: abrir/cerrar proyectos, exportaciones, informes y scripts | EPLAN Electric P8 |
 | [**eplan-cloudflare-rags**](https://github.com/covagashi/eplan-cloudflare-rags) | Cloudflare Workers remotos, repositorio independiente | Servir la documentación de P8 2026, P8 2027 y EEC Pro mediante MCP y REST | EPLAN Electric P8 y EEC Pro |
 | [**eplan-development-skill**](https://github.com/covagashi/eplan-development-skill) | Skill de Claude Code, repositorio independiente | Ayudar a Claude a escribir scripts, código API y aplicaciones Remote Client correctos | EPLAN Electric P8 |
 
@@ -35,13 +35,17 @@ Cada repositorio tiene su propio README con instrucciones de instalación y uso.
 ### Automatización local de EPLAN (P8)
 
 ```bash
-python YOURPATH/eplan-p8-mcp-server/install.py   # own .venv + registers "eplan"
+python YOURPATH/python/install.py   # own .venv + registers "eplan"
 claude mcp list   # debe mostrar "eplan"
 ```
 
-Después, inicia EPLAN, abre Claude Code y di `connect to eplan`. La guía completa está en [`eplan-p8-mcp-server/mcp_server/README.md`](eplan-p8-mcp-server/mcp_server/README.md).
+Después, inicia EPLAN, abre Claude Code y di `connect to eplan`. La guía completa está en [`python/mcp_server/README.md`](python/mcp_server/README.md).
 
 ![Claude CLI configurado](image.png)
+
+**Script host:** typed C# inside EPLAN, in three runtimes (add-in, bootstrap, offline). Guide in English: [`dotnet/SCRIPTING.md`](dotnet/SCRIPTING.md).
+
+![Script host architecture](docs/images/script-host-architecture.svg)
 
 #### Requisito previo
 
@@ -77,7 +81,7 @@ La [wiki del proyecto](https://github.com/covagashi/eplan-rag-mcp/wiki) contiene
 
 `EPLAN_MCP_MODE=discovery` publica 13 herramientas en vez de 199. Reduce el peso de la lista de herramientas, a cambio de una consulta adicional de búsqueda por tarea; resulta útil para clientes MCP que envían el esquema completo de todas las herramientas en cada solicitud.
 
-**No lo uses en Claude Code.** Claude Code ya difiere los esquemas: envía primero los nombres y obtiene cada esquema cuando lo necesita. Por eso, el listado de 199 herramientas en modo `full` cuesta aproximadamente lo mismo que el de 13 en `discovery`; añadir la secuencia búsqueda → descripción → llamada solo introduce otra ida y vuelta. Consulta las mediciones en [la guía del servidor](eplan-p8-mcp-server/mcp_server/README.md#discovery-mode-eplan_mcp_mode).
+**No lo uses en Claude Code.** Claude Code ya difiere los esquemas: envía primero los nombres y obtiene cada esquema cuando lo necesita. Por eso, el listado de 199 herramientas en modo `full` cuesta aproximadamente lo mismo que el de 13 en `discovery`; añadir la secuencia búsqueda → descripción → llamada solo introduce otra ida y vuelta. Consulta las mediciones en [la guía del servidor](python/mcp_server/README.md#discovery-mode-eplan_mcp_mode).
 
 ### RAG remotos de documentación (P8, EEC Pro, 2027)
 
@@ -134,7 +138,7 @@ El servidor MCP local registra herramientas **dinámicamente** a partir de la li
 
 ### 1. Implementa la acción
 
-En `eplan-p8-mcp-server/mcp_server/api/actions/<your_module>.py`:
+En `python/mcp_server/api/actions/<your_module>.py`:
 
 ```python
 def open_project(project_path: str, open_mode: str = None) -> dict:
@@ -153,7 +157,7 @@ def open_project(project_path: str, open_mode: str = None) -> dict:
 
 ### 2. Exporta la función
 
-Añádela tanto a las importaciones como a `__all__` en `eplan-p8-mcp-server/mcp_server/api/actions/__init__.py`. Se registrará automáticamente como `eplan_open_project`.
+Añádela tanto a las importaciones como a `__all__` en `python/mcp_server/api/actions/__init__.py`. Se registrará automáticamente como `eplan_open_project`.
 
 ### 3. Reinicia el servidor MCP
 
@@ -161,10 +165,10 @@ La nueva herramienta estará disponible cuando reinicies Claude o el servidor.
 
 ### 4. Valida con la documentación oficial (opcional)
 
-`eplan-p8-mcp-server/tools/validate_actions.py` coteja los nombres y parámetros de las acciones de los envoltorios con el RAG de la documentación oficial y genera un informe Markdown:
+`python/tools/validate_actions.py` coteja los nombres y parámetros de las acciones de los envoltorios con el RAG de la documentación oficial y genera un informe Markdown:
 
 ```bash
-python eplan-p8-mcp-server/tools/validate_actions.py
+python python/tools/validate_actions.py
 ```
 
 ![Prueba de EPLAN](image-1.png)

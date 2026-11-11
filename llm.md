@@ -39,12 +39,51 @@ Use one of these whenever you are unsure of an exact action name or parameter �
 
 ## 2. The local `eplan` action server
 
-It exposes **234 tools** (full tool-by-tool reference: [the project wiki](https://github.com/covagashi/eplan-rag-mcp/wiki)):
+It exposes **253 tools** (full tool-by-tool reference: [the project wiki](https://github.com/covagashi/eplan-rag-mcp/wiki)):
 
+- **7 script-host tools** (`eplan_script_hello`, `eplan_script_run`,
+  `eplan_script_status`, `eplan_script_cancel`, `eplan_script_list`,
+  `eplan_script_offline_stop`, `eplan_script_host_install`): typed C#
+  run inside EPLAN with no rebuild and no restart. See "Escape hatches" below;
+  prefer them to `eplan_execute_custom_script` for anything that reads or writes
+  the data model. The script library also ships ready-made object tools (texts,
+  line styles, functions, macro boxes, parts snapshots): run them with
+  `eplan_script_run(script="<name>")`, or set `EPLAN_MCP_SCRIPT_TOOLS=publish` to
+  get each as its own `eplan_<name>` tool. Those that write default to
+  `dry_run=True`, write only to scratch clones, take handles from their read
+  tool, and need a `limit` for bulk changes (see dotnet/SCRIPTING.md).
+  `eplan_script_run` itself defaults to `dry_run=False`: pass `dry_run=True` to preview.
+  Library scripts (name: args; `*` = required):
+  - Texts: `text_placements` (page*, symbol_prefix, include_free_texts),
+    `text_set_height` (page*, handle*, height | factor, target=height|font_size, allow_shared;
+    the height and font size of a property text shown from its symbol variant are always refused, use
+    `text_set_box` or make the placements local in EPLAN),
+    `text_set_box` (page*, handle*, has_box, box_fixed_width, box_fixed_height,
+    fitting_permitted, never_hyphenate, remove_breaks, box_width, box_height, allow_shared),
+    `text_create` (page*, text* not blank, x*, y*, height, debug).
+  - Lines: `line_styles` (page*, x0, y0, x1, y1: all four or none, limit),
+    `line_styles_set` (page*, x0*, y0*, x1*, y1*, limit*, style, factor, width).
+  - Functions: `function_move` (page*, moves*: [{handle | name, x, y}]),
+    `function_remove` (page*, names*, symbol_prefix*).
+  - Snapshots: `macrobox_snapshot` (out), `macrobox_restore` (snapshot*, limit*,
+    update_existing, allow_other_project, out), `parts_snapshot` (page_prefix, out),
+    `parts_restore` (snapshot*, limit*, page_prefix, promote_main, allow_other_project, out;
+    matches by object id when the snapshot is from the same project, else by page, full device
+    tag, function definition, symbol and connection points; ties are refused and listed with their
+    candidates in the out file).
+  - Expected refusals (missing argument, unknown page, wrong snapshot) come back as
+    `success: false` with a plain `error`, never a stack trace.
+  - Read inspectors: `project_info` (also offline), `page_inspect` (page, max, include),
+    `page_property` (page*, ids, names, index), `function_inspect` (page, device_tag, max,
+    with_id), `function_dump` (dt*, page, max, fields), `unplaced_functions` (symbol_prefix*,
+    max), `cable_shields` (dt, max), `layer_table`, `symbol_library_inspect` (library*,
+    mode=symbols|variant|arrangements, symbol, variant), `macrobox_links` (pages*, out),
+    `macro_prepare_inspect` (pages*, out), `read_selection` (GUI).
+  - Selection: `set_selection` (pages, page, select_all_on_page, clear; writes the selection only).
 - **8 connection/utility tools**: `eplan_versions`, `eplan_servers`,
   `eplan_connect`, `eplan_status`, `eplan_ping`, `eplan_test`,
   `eplan_disconnect`, `eplan_list_extensions`.
-- **211 EPLAN action tools** → `eplan_<action>` (e.g. `eplan_open_project`).
+- **223 EPLAN action tools** → `eplan_<action>` (e.g. `eplan_open_project`).
   Includes 5 discovery tools (`eplan_settings_list_children`,
   `eplan_list_schemes`, `eplan_list_report_templates`, `eplan_list_layers`,
   `eplan_list_enums`) that enumerate real EPLAN catalogs instead of guessing,
@@ -118,7 +157,21 @@ It exposes **234 tools** (full tool-by-tool reference: [the project wiki](https:
   full exit/relaunch/reconnect/reopen cycles for unattended add-in
   deploy-test loops), scratch project fixtures
   (`eplan_scratch_project_create` / `_discard` / `_list` — disposable clones
-  of a template project; deletion is confined to the scratch root), and
+  of a template project; deletion is confined to the scratch root), an
+  add-in development loop driven by a manifest an extension registers by name
+  (`eplan_addin_build`, `eplan_addin_deploy`, `eplan_addin_update` - build,
+  shut EPLAN down, deploy, relaunch, verify the actions registered; deploy and
+  restart are opt-in, `do_deploy=True` / `restart=True`, only when the user
+  asked - and `eplan_list_addin_actions`, a static scan of the add-in's C# for
+  its action names), scratch symbol-library
+  isolation (`eplan_scratch_symbols_create` / `_restore` / `_purge` /
+  `_status` and `eplan_assert_isolation` - redirect $(MD_SYMBOLS) at copies so
+  a symbol-writing test cannot reach the real libraries; the gate needs a
+  library reader an extension registers), out-of-process UI Automation
+  (`eplan_ui_drive`, `eplan_ui_dismiss_watch_start`,
+  `eplan_ui_dismiss_watch_stop`: drive WinForms dialogs and arm a modal dismisser BEFORE a blocking action;
+  window lookups match EPLAN's own windows unless `process` names another;
+  dialog presets come from extensions), and
   `eplan_get_system_messages` (read EPLAN's system message tree — the same
   errors/warnings the user sees in the GUI's system messages dialog).
 - **4 action-catalog tools** reaching the ~1,050 further EPLAN actions that
@@ -279,6 +332,46 @@ All of these exist as `eplan_*` tools:
 
 ### Escape hatches
 
+- **`eplan_script_run(code=... | script=..., args=..., project=...)` — the
+  preferred way to do anything the tools above do not cover.** Write ordinary,
+  typed C# against the EPLAN API: `using Eplan.EplApi.DataModel;` works here
+  (the host compiles with the full reference set; CS0234 is a limit of EPLAN's
+  own script engine only). A bare statement body is enough:
+  `var p = ctx.RequireProject(); return new DMObjectsFinder(p).GetPages(null).Length;`.
+  - `ctx` gives `Project`, `Args` (`String`/`Int`/`Bool`/`List`),
+    `Budget.Check()` (call it in every long loop: it is the only way a run can
+    stop), `Progress()`, `Log()`, `Lock(obj)`, `DryRun`, `WriteAllowed`.
+    Return plain data. The run already holds a `LockingStep`.
+  - Call `eplan_script_hello` once first: it reports the host version, which
+    runtime answers (`addin`, else `bootstrap`), the EPLAN version and the
+    license. Every runtime (add-in, bootstrap, offline) needs the EPLAN API
+    developer license. `runtime="offline"` works on a closed `.elk` path with no
+    EPLAN window, for scripts with `@needs offline` or `@needs either`.
+  - **Writes:** declare `// @writes true`. Ad-hoc scripts may write only when
+    the TARGET project is a scratch clone from `eplan_scratch_project_create`,
+    and a writing script may touch only `ctx.Project` (no `ProjectManager`, no
+    selection); other projects may stay open.
+    A real project needs all of: `EPLAN_MCP_ALLOW_REAL_PROJECT_WRITES=1` in the
+    server's environment (a person sets it in the MCP config; you cannot), a
+    saved script in a script library folder, `allow_real_project=True`, and the
+    `confirm_code` from a `compile_only=True` run of that script. **Show the
+    `confirm_code` and what the script changes to the user and get their
+    approval before passing it.** The scratch marker is a guard against
+    mistakes, not a security boundary: a script is C# running in EPLAN.
+    Read-only runs reject EPLAN writes at compile time.
+  - Compile errors come back with your own line numbers and "did you mean"
+    hints; fix and re-run (a warm compile takes milliseconds). Use
+    `compile_only=True` to check without running.
+  - Long runs return a `run_id`: follow with `eplan_script_status`, stop with
+    `eplan_script_cancel`. `eplan_script_list` shows the script library;
+    `dotnet/scripts/_template.cs` is the starting point for a new one.
+  - `eplan_script_offline_stop` stops the offline host (`runtime="offline"`;
+    it otherwise exits after 30 idle minutes).
+  - No local `dotnet/` build? The host installs itself on first use from the
+    GitHub release matching the server's version, checked against its
+    SHA-256 sums; `eplan_script_host_install` does it explicitly and returns
+    the `install_file` to register the add-in with `eplan_register_addon`.
+    `eplan_script_hello` warns when the host's version differs.
 - `eplan_execute_raw_action("ActionName /PARAM:value ...")` — run any EPLAN
   action string directly (still wrapped in QuietMode). Use after confirming the
   syntax with the RAG.
@@ -312,11 +405,17 @@ All of these exist as `eplan_*` tools:
 - **EPLAN settings at runtime:** via `eplan_set_setting` /
   `eplan_set_project_setting` (action params `set`/`value`/`index`) or the
   typed `eplan_settings_set_*` scripted tools.
-- **The MCP registration itself:** `python eplan-p8-mcp-server/install.py` (own `.venv`, registers `eplan`).
+- **The MCP registration itself:** `python python/install.py` (own `.venv`, registers `eplan`).
 
 ---
 
 ## 6. Caveats & gotchas
+
+- **Never pass an action a file path under the long-form `AppData` folder.**
+  `ExecuteScript /ScriptFile:"C:\Users\<user>\AppData\Local\..."` (or `...\Roaming\...`)
+  is silently ignored on 2027.0.3: success is reported and nothing runs. Use a path
+  under the user profile (`~\.eplan-mcp`), ProgramData, Documents or the 8.3-form
+  TEMP. Measured 2026-11-10; see `dotnet/tests/live/results-2027.0.3.md`.
 
 - **Connect before acting.** Unconnected calls return a "Not connected" error.
 - **`project_name` is optional** — omitting it uses the selected project. Pass the
